@@ -1,0 +1,27 @@
+Caption: Mission anchored: Building the world's autonomous AI workforce.
+
+
+
+Slide 1
+Headline: Still Fighting Admin?
+Copy: We build around one mission: Building the world's autonomous AI workforce.
+DesignArtifact.visual_prompt: Hero Hook motif for Relevance AI: oversized kinetic headline silhouette emerging from charcoal fog with neon rim pulses. Render at 4:5 portrait with cinematic three-point lighting on deep charcoal-to-black gradient plates separated by razor-thin neon splits. Electric blue halo bleeds behind bold glassy headline lockups while saturated crimson accent lines carve CTA zones; keep micro-glitch/nebula sparkle only at contrast edges. GPT-image-1 spec: ultra-sharp glowing display type, dramatic shadow falloff, hyperreal specular highlights—no baked paragraph body text in the raster—preserve premium negative space for UI overlay in production.
+layout_config: {"theme":"canva-killer-dark","accent":"neon-red-blue","text_effect":"glowing"}
+
+Slide 2
+Headline: Common Mistake Exposed
+Copy: Teams normalize grinding through Teams stuck with one-off automations that do not scale. Before: fragmented chaos. After: orchestrated clarity.
+DesignArtifact.visual_prompt: Split-panel Before/After metaphor — cold slate chaos versus disciplined cobalt pathways intersecting red focal rails. Render at 4:5 portrait with cinematic three-point lighting on deep charcoal-to-black gradient plates separated by razor-thin neon splits. Electric blue halo bleeds behind bold glassy headline lockups while saturated crimson accent lines carve CTA zones; keep micro-glitch/nebula sparkle only at contrast edges. GPT-image-1 spec: ultra-sharp glowing display type, dramatic shadow falloff, hyperreal specular highlights—no baked paragraph body text in the raster—preserve premium negative space for UI overlay in production.
+layout_config: {"theme":"canva-killer-dark","accent":"neon-red-blue","text_effect":"glowing"}
+
+Slide 3
+Headline: The Quiet Advantage
+Copy: Building the world's autonomous AI workforce.
+DesignArtifact.visual_prompt: Secrets reveal slide — orbiting cyan beams tightening toward central prism motif implying proprietary unlock. Render at 4:5 portrait with cinematic three-point lighting on deep charcoal-to-black gradient plates separated by razor-thin neon splits. Electric blue halo bleeds behind bold glassy headline lockups while saturated crimson accent lines carve CTA zones; keep micro-glitch/nebula sparkle only at contrast edges. GPT-image-1 spec: ultra-sharp glowing display type, dramatic shadow falloff, hyperreal specular highlights—no baked paragraph body text in the raster—preserve premium negative space for UI overlay in production.
+layout_config: {"theme":"canva-killer-dark","accent":"neon-red-blue","text_effect":"glowing"}
+
+Slide 4
+Headline: Claim Your Motion
+Copy: BUILD YOUR AI WORKFORCE — tap in, we ship the playbook.
+DesignArtifact.visual_prompt: Massive glowing CTA slab with simulated glassmorphism button, crimson halo pulse, cobalt frame, click- affordance cues. Render at 4:5 portrait with cinematic three-point lighting on deep charcoal-to-black gradient plates separated by razor-thin neon splits. Electric blue halo bleeds behind bold glassy headline lockups while saturated crimson accent lines carve CTA zones; keep micro-glitch/nebula sparkle only at contrast edges. GPT-image-1 spec: ultra-sharp glowing display type, dramatic shadow falloff, hyperreal specular highlights—no baked paragraph body text in the raster—preserve premium negative space for UI overlay in production.
+layout_config: {"theme":"canva-killer-dark","accent":"neon-red-blue","text_effect":"glowing"}
