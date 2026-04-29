@@ -290,6 +290,12 @@ export interface ActivityLog {
   metadata?: Record<string, unknown>;
 }
 
+/** Completion cues derived from activity_logs step_ids + message text (Phase 6 shared contract). */
+export interface ManagerWorkflowCompletionSignals {
+  step_ids: WorkflowStepId[];
+  log_patterns?: string[];
+}
+
 export interface ManagerWorkflowStep {
   id: string;
   label: string;
@@ -301,6 +307,8 @@ export interface ManagerWorkflowStep {
   depends_on: string[];
   completion_step_ids: WorkflowStepId[];
   completion_log_patterns?: string[];
+  /** Mirrors completion_* fields for API clarity — same arrays as completion_step_ids / completion_log_patterns. */
+  completion_signals?: ManagerWorkflowCompletionSignals;
 }
 
 export interface CampaignEmailDraft {

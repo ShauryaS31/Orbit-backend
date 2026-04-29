@@ -12,6 +12,7 @@ import type {
   ProductMarketingContext,
   VisualIdentity,
   WorkflowState,
+  WorkflowStepId,
 } from "@/lib/types/orbit";
 import { LYRA_WARM_INTELLIGENCE } from "@/lib/data/lyra-brand-intelligence";
 import { countEmojis, hasForbiddenPhrase } from "@/lib/agents/prompts";
@@ -252,6 +253,11 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
   };
 }
 
+function cs(step_ids: WorkflowStepId[], log_patterns?: string[]) {
+  return { step_ids, log_patterns };
+}
+
+/** Canonical marketing workflow steps — aligned with workflow-execution ordering (Phase 6 shared UI contract). */
 function buildManagerWorkflowSteps(
   input: ManagerInput,
   selectedSkills: string[],
@@ -261,80 +267,115 @@ function buildManagerWorkflowSteps(
   const skillList = selectedSkills.length ? selectedSkills.join(", ") : "content, visual, and QA skills";
   const goal = input.business_goal ?? "the requested growth objective";
 
-  return [
+  const steps: ManagerWorkflowStep[] = [
     {
-      id: "manager_understands_context",
-      label: "Scott reads context",
+      id: "receive_operator_context",
+      label: "Receive operator brief",
       owner_agent_id: "scott",
       owner_display_name: "Scott",
       owner_role: "manager",
-      summary: `Read ${input.companyName} context and frame the job around ${goal}.`,
-      expected_output: "Context-aware manager brief",
+      summary: `Scott reads the operator goal, learning notes, and company context for ${input.companyName}.`,
+      expected_output: "Objective framed for Nova discovery and downstream execution.",
       depends_on: [],
       completion_step_ids: ["request_received"],
-      completion_log_patterns: ["reading the goal", "demo workflow received"],
+      completion_log_patterns: ["reading the goal", "reading company context", "demo workflow received"],
+      completion_signals: cs(["request_received"], ["reading the goal", "reading company context", "demo workflow received"]),
     },
     {
-      id: "manager_creates_plan",
-      label: "Scott creates plan",
+      id: "nova_brand_intelligence",
+      label: "Nova researches brand intelligence",
+      owner_agent_id: "nova",
+      owner_display_name: "Nova",
+      owner_role: "employee",
+      summary:
+        "Nova organizes crawl signals, palette, audiences, and proof cues before Scott locks strategy.",
+      expected_output: "Brand discovery snapshot feeding Consultant Mode review.",
+      depends_on: ["receive_operator_context"],
+      completion_step_ids: ["brand_profile_loaded", "website_intelligence_gathered"],
+      completion_log_patterns: ["diving into", "organizing palette", "brand signals"],
+      completion_signals: cs(["brand_profile_loaded", "website_intelligence_gathered"], ["diving into", "organizing palette", "brand signals"]),
+    },
+    {
+      id: "scott_defines_strategy",
+      label: "Scott defines strategy",
       owner_agent_id: "scott",
       owner_display_name: "Scott",
       owner_role: "manager",
-      summary: `Create a ${channelPlan} plan and choose the specialist skills needed.`,
-      expected_output: "Structured task plan with channel sequence",
-      depends_on: ["manager_understands_context"],
+      summary: `Scott aligns ${channelPlan} sequencing and messaging pillars to ${goal}.`,
+      expected_output: "Marketing context + strategic intents for specialists.",
+      depends_on: ["nova_brand_intelligence"],
       completion_step_ids: ["marketing_context_built"],
-      completion_log_patterns: ["breaking the growth objective", "aligning our 7-day strategy"],
+      completion_log_patterns: ["breaking the growth objective", "aligning our"],
+      completion_signals: cs(["marketing_context_built"], ["breaking the growth objective", "aligning our"]),
     },
     {
-      id: "manager_delegates_skills",
-      label: "Scott delegates skills",
+      id: "scott_assigns_specialists",
+      label: "Scott assigns specialist skills",
       owner_agent_id: "scott",
       owner_display_name: "Scott",
       owner_role: "manager",
-      summary: `Assign ${skillList} to produce copy, creative direction, and QA.`,
-      expected_output: "Specialist assignments",
-      depends_on: ["manager_creates_plan"],
+      summary: `Route manager-owned tools (${skillList}) for channel execution.`,
+      expected_output: "Skill routing manifest tied to goal posture.",
+      depends_on: ["scott_defines_strategy"],
       completion_step_ids: ["marketing_context_built"],
       completion_log_patterns: ["assigning"],
+      completion_signals: cs(["marketing_context_built"], ["assigning"]),
     },
     {
-      id: "nova_and_skills_produce_drafts",
-      label: "Nova produces drafts",
+      id: "specialists_generate_drafts",
+      label: "Specialists generate channel drafts",
       owner_agent_id: "nova",
       owner_display_name: "Nova",
-      owner_role: "employee",
-      summary: `Turn Scott's brief into channel-ready ${channelPlan} draft content.`,
-      expected_output: "Campaign execution drafts",
-      depends_on: ["manager_delegates_skills"],
+      owner_role: "skill",
+      summary: `Content/visual specialists execute ${channelPlan} drafts against locked tokens.`,
+      expected_output: "Campaign execution drafts + studio bundles.",
+      depends_on: ["scott_assigns_specialists"],
       completion_step_ids: ["campaign_draft_generated"],
-      completion_log_patterns: ["initial drafts packaged", "drafting"],
+      completion_log_patterns: ["initial drafts packaged", "drafting", "human-natural filter"],
+      completion_signals: cs(["campaign_draft_generated"], ["initial drafts packaged", "drafting"]),
     },
     {
-      id: "nova_generates_visuals",
-      label: "Nova prepares visuals",
-      owner_agent_id: "nova",
-      owner_display_name: "Nova",
-      owner_role: "employee",
-      summary: "Generate visual briefs and image assets from the approved brand direction.",
-      expected_output: "Generated campaign image assets",
-      depends_on: ["nova_and_skills_produce_drafts"],
-      completion_step_ids: ["visual_assets_generated"],
-      completion_log_patterns: ["assets ready", "generating"],
-    },
-    {
-      id: "manager_reviews_package",
-      label: "Scott reviews package",
+      id: "scott_manager_review_guardrail",
+      label: "Scott runs manager review guardrail",
       owner_agent_id: "scott",
       owner_display_name: "Scott",
       owner_role: "manager",
-      summary: "Review governance, assemble the workspace, and mark the final package ready.",
-      expected_output: "Final growth strategy package",
-      depends_on: ["nova_generates_visuals"],
+      summary: "Deterministic QA on drafts — overlap, claims, channel voice, CTAs.",
+      expected_output: "Reviewed drafts + governance audit entries.",
+      depends_on: ["specialists_generate_drafts"],
+      completion_step_ids: ["campaign_draft_generated"],
+      completion_log_patterns: ["manager review", "guardrail", "brand compliance", "deterministic qa"],
+      completion_signals: cs(["campaign_draft_generated"], ["manager review", "guardrail", "qa skill"]),
+    },
+    {
+      id: "visual_assets_rendered",
+      label: "Visual assets rendered",
+      owner_agent_id: "nova",
+      owner_display_name: "Nova",
+      owner_role: "skill",
+      summary: "Generate governed imagery from draft prompts and brand palette.",
+      expected_output: "Generated campaign assets ready for founder review.",
+      depends_on: ["scott_manager_review_guardrail"],
+      completion_step_ids: ["visual_assets_generated"],
+      completion_log_patterns: ["abstract motif", "assets ready", "rendering"],
+      completion_signals: cs(["visual_assets_generated"], ["assets ready", "generating abstract"]),
+    },
+    {
+      id: "final_package_ready",
+      label: "Final package & workspace ready",
+      owner_agent_id: "scott",
+      owner_display_name: "Scott",
+      owner_role: "manager",
+      summary: "Package workspace assets and expose strategy/report surfaces.",
+      expected_output: "Campaign workspace ready + workflow_ready marker.",
+      depends_on: ["visual_assets_rendered"],
       completion_step_ids: ["campaign_package_ready", "workflow_ready"],
-      completion_log_patterns: ["workspace packaged", "workspace is ready"],
+      completion_log_patterns: ["workspace packaged", "workspace is ready", "campaign workspace"],
+      completion_signals: cs(["campaign_package_ready", "workflow_ready"], ["workspace packaged", "workspace is ready"]),
     },
   ];
+
+  return steps;
 }
 
 function attachStrategicIntent(draft: CampaignExecutionDraft, intent: string): CampaignExecutionDraft {
