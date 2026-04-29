@@ -1,12 +1,17 @@
 import type { ActivityLog, CampaignExecutionDraft, WorkflowState } from "@/lib/types/orbit";
+import fs from "node:fs";
+import path from "node:path";
 
 type WorkflowStatePatch = Partial<Omit<WorkflowState, "id" | "created_at">>;
 
 class WorkflowStore {
   private static instance: WorkflowStore | null = null;
   private readonly workflows = new Map<string, WorkflowState>();
+  private readonly storagePath = path.join(process.cwd(), ".orbit-workflows.json");
 
-  private constructor() {}
+  private constructor() {
+    this.loadFromDisk();
+  }
 
   static getInstance(): WorkflowStore {
     if (!WorkflowStore.instance) {
@@ -23,10 +28,14 @@ class WorkflowStore {
       updated_at: now,
     };
     this.workflows.set(workflow.id, workflow);
+    this.persistToDisk();
     return workflow;
   }
 
   getWorkflow(id: string): WorkflowState | undefined {
+    if (!this.workflows.has(id)) {
+      this.loadFromDisk();
+    }
     return this.workflows.get(id);
   }
 
@@ -43,6 +52,7 @@ class WorkflowStore {
     };
 
     this.workflows.set(id, updated);
+    this.persistToDisk();
     return updated;
   }
 
@@ -66,6 +76,7 @@ class WorkflowStore {
     };
 
     this.workflows.set(id, updatedWorkflow);
+    this.persistToDisk();
     return newLog;
   }
 
@@ -102,8 +113,36 @@ class WorkflowStore {
       campaign_execution_drafts: drafts,
       updated_at: new Date().toISOString(),
     });
+    this.persistToDisk();
 
     return updatedDraft;
+  }
+
+  private loadFromDisk(): void {
+    try {
+      if (!fs.existsSync(this.storagePath)) return;
+      const raw = fs.readFileSync(this.storagePath, "utf8");
+      if (!raw.trim()) return;
+      const parsed = JSON.parse(raw) as WorkflowState[];
+      this.workflows.clear();
+      for (const workflow of parsed) {
+        this.workflows.set(workflow.id, workflow);
+      }
+    } catch (error) {
+      console.warn("[workflow-store] Failed to load workflow cache", error);
+    }
+  }
+
+  private persistToDisk(): void {
+    try {
+      fs.writeFileSync(
+        this.storagePath,
+        JSON.stringify([...this.workflows.values()], null, 2),
+        "utf8",
+      );
+    } catch (error) {
+      console.warn("[workflow-store] Failed to persist workflow cache", error);
+    }
   }
 }
 

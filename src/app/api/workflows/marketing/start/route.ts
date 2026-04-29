@@ -101,45 +101,7 @@ export async function POST(request: Request) {
       step_id: "request_received",
       message: "[Scott]: Demo workflow received - Nova's cached discovery is staged.",
     });
-    if (lyraMode) {
-      workflowStore.addLog(workflowId, {
-        role: "researcher",
-        step_id: "website_intelligence_gathered",
-        message:
-          "[Nova]: Pulling Lyra warm intelligence from the approved demo research cache...",
-      });
-      workflowStore.addLog(workflowId, {
-        role: "researcher",
-        step_id: "website_intelligence_gathered",
-        message:
-          "[Nova]: Found Lyra proof anchors: Fellowship, Lyrathon, Anthropic, Melbourne expansion, and client delivery examples.",
-      });
-      workflowStore.addLog(workflowId, {
-        role: "researcher",
-        step_id: "website_intelligence_gathered",
-        message:
-          "[Nova]: Organizing Lyra's culture-to-execution positioning for Scott's review.",
-      });
-    }
-    workflowStore.addLog(workflowId, {
-      role: "researcher",
-      step_id: "website_intelligence_gathered",
-      message:
-        "[Nova]: Pulled discovery from warm cache - signals organized for Scott under Nova's Research Report.",
-    });
-    workflowStore.addLog(workflowId, {
-      role: "analyst",
-      step_id: "validation_completed",
-      message:
-        "[Scott - QA skill]: Validation snapshot looks launch-ready - Nova's palette thesis checks out.",
-    });
-    workflowStore.addLog(workflowId, {
-      role: "strategist",
-      step_id: "marketing_context_built",
-      message: "[Scott]: Product marketing context assembled - handing off from Nova's findings.",
-    });
-    await runCampaignGeneration(workflowId);
-
+    runCampaignGenerationInBackground(workflowId);
     return NextResponse.json({ workflow_id: workflowId, status: "started" });
   }
 
@@ -212,6 +174,20 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ workflow_id: workflowId, status: "started" });
+}
+
+function runCampaignGenerationInBackground(workflowId: string): void {
+  void runCampaignGeneration(workflowId).catch((error) => {
+    workflowStore.updateWorkflow(workflowId, {
+      status: "failed",
+      error_message: (error as Error).message,
+    });
+    workflowStore.addLog(workflowId, {
+      role: "marketing_manager",
+      step_id: "workflow_ready",
+      message: `[Scott]: Workflow failed - ${(error as Error).message}`,
+    });
+  });
 }
 
 function buildFallbackMarketingContext(

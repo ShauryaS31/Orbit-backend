@@ -32,8 +32,8 @@ interface DraftInput {
 function neonVisualPrompt(sceneFocus: string): string {
   return (
     `${sceneFocus}` +
-    ` Render at 4:5 portrait with cinematic three-point lighting on deep charcoal-to-black gradient plates separated by razor-thin neon splits.` +
-    ` Electric blue halo bleeds behind bold glassy headline lockups while saturated crimson accent lines carve CTA zones; keep micro-glitch/nebula sparkle only at contrast edges.` +
+    ` Render at 4:5 portrait with brand-specific editorial lighting, real-world visual cues, and clean negative space for UI overlay.` +
+    ` Use the supplied brand palette and visual DNA instead of generic neon, sci-fi, or stock corporate imagery.` +
     ` GPT-image-1 spec: ultra-sharp glowing display type, dramatic shadow falloff, hyperreal specular highlights—no baked paragraph body text in the raster—preserve premium negative space for UI overlay in production.`
   );
 }
@@ -68,11 +68,6 @@ function slideFromArtifact(
 export function createInstagramCarouselDraft(input: DraftInput): CampaignCarouselDraft {
   const frictionPoint = getFrictionPoint(input.context);
   const mission = input.context.mission_statement;
-  const sopPromptBlend = `${INSTAGRAM_CAROUSEL_EXPERT_SYSTEM_INSTRUCTION}\n\n${buildHumanFilterPrompt({
-    friction_point: frictionPoint,
-    company_name: input.companyName,
-  })}\nOUTPUT CONSTRAINT: Exactly four slides — Hook, Problem, Proof, CTA — each slide populated as structured DesignArtifact fields for downstream rendering.`;
-
   const artifacts: DesignArtifact[] = [
     designArtifact(
       "Still Fighting Admin?",
@@ -107,7 +102,7 @@ export function createInstagramCarouselDraft(input: DraftInput): CampaignCarouse
       day: input.day,
       status: "pending_review",
       channel: "instagram",
-      original_prompt: `${sopPromptBlend}\n${input.originalPrompt}`,
+      original_prompt: `${input.originalPrompt}\nOUTPUT CONSTRAINT: Exactly four slides - Hook, Problem, Proof, CTA - each slide populated as structured DesignArtifact fields for downstream rendering.`,
       is_published: false,
       carousel_expert_mode: false,
     },
@@ -139,11 +134,6 @@ export function createInstagramCarouselExpertDraft(input: DraftInput): CampaignC
   const keywordToken = input.context.primary_cta.split(/\s+/).find((w) => w.length > 3);
   const keyword =
     (keywordToken ? keywordToken.toUpperCase().replace(/[^A-Z]/g, "") : "") || "STRATEGY";
-
-  const expertPrompt = `${INSTAGRAM_CAROUSEL_EXPERT_SYSTEM_INSTRUCTION}\n\n${buildHumanFilterPrompt({
-    friction_point: frictionPoint,
-    company_name: input.companyName,
-  })}\nMODE: Carousel Maker — emit the complete 10-slide sequence with synchronized DesignArtifact payloads.`;
 
   const roles = [
     "Hook · motif",
@@ -229,7 +219,7 @@ export function createInstagramCarouselExpertDraft(input: DraftInput): CampaignC
       day: input.day,
       status: "pending_review",
       channel: "instagram",
-      original_prompt: `${expertPrompt}\n${input.originalPrompt}`,
+      original_prompt: `${input.originalPrompt}\nMODE: Carousel Maker - emit the complete 10-slide sequence with synchronized DesignArtifact payloads.`,
       is_published: false,
       carousel_expert_mode: true,
     },
@@ -328,7 +318,7 @@ export function buildChannelSopPrompt(
     : "Use brand-consistent visual DNA inferred from the website.";
 
   if (channel === "instagram") {
-    return `${INSTAGRAM_CAROUSEL_EXPERT_SYSTEM_INSTRUCTION}\n${base}\n${visualDnaInstruction}\nDESIGN-FIRST PIPELINE: Populate design_artifact per slide with headline (≤5 words), body (1–2 lines), visual_prompt (GPT-image-1 neon cinematic spec), layout_config { theme: 'canva-killer-dark', accent: 'neon-red-blue', text_effect: 'glowing' }.`;
+    return `${INSTAGRAM_CAROUSEL_EXPERT_SYSTEM_INSTRUCTION}\n${base}\n${visualDnaInstruction}\nDESIGN-FIRST PIPELINE: Populate design_artifact per slide with headline (<=5 words), body (1-2 lines), visual_prompt (brand-specific editorial brief), layout_config { theme: 'canva-killer-dark', accent: 'neon-red-blue', text_effect: 'glowing' }.`;
   }
   if (channel === "linkedin") {
     return `${base}\n${visualDnaInstruction}\nSOP: First-person founder narrative. Short punchy paragraphs. NO AI tropes (avoid: unlocking, revolutionizing, in today's fast-paced).`;

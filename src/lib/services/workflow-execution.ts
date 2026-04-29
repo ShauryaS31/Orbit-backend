@@ -17,6 +17,23 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     throw new Error("Workflow missing required context for campaign generation.");
   }
 
+  await thinkTime(workflow.demo_mode && !workflow.carousel_maker_mode);
+
+  workflowStore.addLog(workflowId, {
+    role: "marketing_manager",
+    step_id: "request_received",
+    message: `[Scott]: Reading the goal and company context for ${workflow.website_intelligence.company_name}.`,
+  });
+  await thinkTime(workflow.demo_mode && !workflow.carousel_maker_mode);
+
+  workflowStore.addLog(workflowId, {
+    role: "marketing_manager",
+    step_id: "marketing_context_built",
+    message:
+      "[Scott]: Breaking the growth objective into research, content, visual, and QA subtasks.",
+  });
+  await thinkTime(workflow.demo_mode && !workflow.carousel_maker_mode);
+
   if (workflow.brand_learning_notes?.length) {
     const blended = applyBrandLearning(
       workflow.website_intelligence,
@@ -126,6 +143,11 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     appendGovernanceLog(workflowId, entry);
   }
 
+  workflowStore.updateWorkflow(workflowId, {
+    selected_skills: managerOutput.selected_skills,
+    manager_workflow_steps: managerOutput.workflow_steps,
+  });
+
   for (const skillId of managerOutput.selected_skills ?? []) {
     workflowStore.addLog(workflowId, {
       role: "marketing_manager",
@@ -184,6 +206,7 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     generated_campaign_assets: generatedAssets,
     design_studio_exports: designStudioExports,
     selected_skills: managerOutput.selected_skills,
+    manager_workflow_steps: managerOutput.workflow_steps,
   });
 
   workflowStore.addLog(workflowId, {
@@ -256,6 +279,10 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     step_id: "workflow_ready",
     message: "[Scott]: Campaign workspace is ready for the UI.",
   });
+
+  workflowStore.updateWorkflow(workflowId, {
+    status: "completed",
+  });
 }
 
 function describeDesignArtifactBundle(skillIds: string[]): string {
@@ -291,6 +318,13 @@ async function generateVisualAssets(
   });
 
   for (const day of days) {
+    const sourceDraft = drafts.find(
+      (draft) => draft.meta.day === day && draft.meta.channel === "instagram",
+    );
+    const visualPrompt =
+      sourceDraft?.meta.image_prompt_detailed ??
+      `Campaign background for Instagram Carousel Day ${day}. Context: ${managerInput.context.mission_statement}.`;
+
     workflowStore.addLog(workflowId, {
       role: "visual_agent",
       step_id: "visual_assets_generated",
@@ -299,12 +333,9 @@ async function generateVisualAssets(
 
     try {
       const response = await generateBrandBackground(
-        `Campaign background for Instagram Carousel Day ${day}. Context: ${managerInput.context.mission_statement}.`,
+        visualPrompt,
         managerInput.brandKit,
         managerInput.visualIdentity,
-      );
-      const sourceDraft = drafts.find(
-        (draft) => draft.meta.day === day && draft.meta.channel === "instagram",
       );
 
       assets.push({
@@ -334,14 +365,13 @@ async function generateVisualAssets(
     }
   }
 
-  const wf = workflowStore.getWorkflow(workflowId);
   appendGovernanceLog(
     workflowId,
     createGovernanceEntry({
       agent_id: "visual_agent",
       step_id: "visual_assets_generated",
-      decision: "Rendered abstract campaign backgrounds aligned to chromatic hierarchy.",
-      rationale: `Motifs amplify palette contrast (${managerInput.brandKit.primary_hex} ↔ ${managerInput.brandKit.accent_hex}) while reinforcing ${wf?.visual_identity?.visual_tone ?? "brand"} posture—abstract only (no figurative overlays).`,
+      decision: "Rendered campaign visuals from draft-specific creative briefs.",
+      rationale: `Prompts use per-draft source anchors, negative prompts, and brand visual DNA instead of generic abstract backgrounds. Palette remains anchored to ${managerInput.brandKit.primary_hex}, ${managerInput.brandKit.secondary_hex}, and ${managerInput.brandKit.accent_hex}.`,
       resulting_asset: "generated_campaign_assets",
     }),
   );

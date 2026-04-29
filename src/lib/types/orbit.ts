@@ -260,6 +260,19 @@ export interface ActivityLog {
   metadata?: Record<string, unknown>;
 }
 
+export interface ManagerWorkflowStep {
+  id: string;
+  label: string;
+  owner_agent_id: string;
+  owner_display_name: string;
+  owner_role: "manager" | "employee" | "skill";
+  summary: string;
+  expected_output: string;
+  depends_on: string[];
+  completion_step_ids: WorkflowStepId[];
+  completion_log_patterns?: string[];
+}
+
 export interface CampaignEmailDraft {
   meta: DraftMetadata;
   type: "email";
@@ -364,6 +377,8 @@ export interface WorkflowState {
   consultant_discovery?: ConsultantDiscoveryMetadata;
   /** Stable skill IDs last chosen by Marketing Manager (goal-driven orchestration). */
   selected_skills?: string[];
+  /** Manager-authored plan for UI workflow progress. */
+  manager_workflow_steps?: ManagerWorkflowStep[];
   /** Optional structured warm cache used in demo mode for known company profiles. */
   lyra_warm_intelligence?: LyraWarmIntelligence;
   /** When true, campaign generation runs-design-first expert carousel (10 slides) instead of generalist 7-day mix. */

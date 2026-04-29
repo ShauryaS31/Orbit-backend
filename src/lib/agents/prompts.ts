@@ -68,10 +68,10 @@ export const INSTAGRAM_CAROUSEL_EXPERT_SYSTEM_INSTRUCTION = `YOU ARE AN EXPERT I
 
 FOLLOW THIS VISUAL DNA FOR EVERY PROJECT:
 - Aspect Ratio: 4:5 (Portrait)
-- Style: Bold, modern, high-contrast, cinematic lighting.
-- Palette: Deep charcoal/black backgrounds with neon red and electric blue accents.
-- Effects: Ultra-sharp, high detail, glowing text, dramatic shadows, slight glitch/nebula effects.
-- Typography: Short, bold headlines (max 4-5 words) in high-impact font styles.
+- Style: Bold, modern, high-trust editorial design guided by the target brand.
+- Palette: Use the supplied brand HEX tokens and visual identity. Do not default to generic neon.
+- Effects: Ultra-sharp, high detail, premium depth, and clean contrast without sci-fi cliches.
+- Typography: Short, bold headlines (max 4-5 words) with enough negative space for real UI/layout overlays.
 
 FOLLOW THIS 7-10 SLIDE 'VIRAL FORMULA':
 - Slide 1 (The Hook): High-impact clickbait headline + attention-grabbing visual motif.

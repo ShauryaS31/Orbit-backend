@@ -1,10 +1,15 @@
 import OpenAI from "openai";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 import type { BrandKit, VisualIdentity } from "@/lib/types/orbit";
 
 const DEFAULT_VISUAL_VIBE = "clean editorial abstraction with soft lighting";
 
 export const IMAGE_GENERATION_ENABLED = process.env.ENABLE_IMAGE_GEN === "true";
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1.5";
+const IMAGE_QUALITY = parseImageQuality(process.env.OPENAI_IMAGE_QUALITY);
+const IMAGE_SIZE = parseImageSize(process.env.OPENAI_IMAGE_SIZE);
 
 const PLACEHOLDER_BRAND_MOTIF_URL = "/images/placeholder-brand-motif.png";
 
@@ -39,19 +44,53 @@ export async function generateBrandBackground(
   const client = new OpenAI({ apiKey });
 
   const result = await client.images.generate({
-    model: "gpt-image-1",
+    model: IMAGE_MODEL,
     prompt: fullPrompt,
-    size: "1792x1024",
-    quality: "standard",
+    size: IMAGE_SIZE,
+    quality: IMAGE_QUALITY,
     n: 1,
   });
 
-  const imageUrl = result.data?.[0]?.url;
+  const image = result.data?.[0];
+  const imageUrl = image?.url;
+  if (imageUrl) {
+    return { image_url: imageUrl, full_prompt: fullPrompt };
+  }
+
+  if (image?.b64_json) {
+    const savedUrl = await saveGeneratedImage(image.b64_json);
+    return { image_url: savedUrl, full_prompt: fullPrompt };
+  }
+
   if (!imageUrl) {
-    throw new Error("OpenAI did not return an image URL.");
+    throw new Error("OpenAI did not return an image URL or base64 payload.");
   }
 
   return { image_url: imageUrl, full_prompt: fullPrompt };
+}
+
+async function saveGeneratedImage(base64Image: string): Promise<string> {
+  const outputDir = path.join(process.cwd(), "public", "generated-images");
+  const filename = `${crypto.randomUUID()}.png`;
+
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(path.join(outputDir, filename), Buffer.from(base64Image, "base64"));
+
+  return `/generated-images/${filename}`;
+}
+
+function parseImageSize(value?: string): "1536x1024" | "auto" | "1024x1024" | "1024x1536" {
+  if (value === "auto" || value === "1024x1024" || value === "1024x1536" || value === "1536x1024") {
+    return value;
+  }
+  return "1536x1024";
+}
+
+function parseImageQuality(value?: string): "auto" | "low" | "medium" | "high" {
+  if (value === "auto" || value === "low" || value === "medium" || value === "high") {
+    return value;
+  }
+  return "medium";
 }
 
 function buildBrandPrompt(
@@ -63,6 +102,20 @@ function buildBrandPrompt(
   const visualDna = visualIdentity
     ? `Visual DNA to preserve: tone=${visualIdentity.visual_tone}; patterns=${visualIdentity.design_patterns.join(", ")}; typography=${visualIdentity.typography_vibes.join(", ")}; color-usage=${visualIdentity.color_usage}.`
     : "Visual DNA to preserve: premium minimal and consistent with source brand assets.";
+  const hasDetailedCreativeBrief =
+    /subject:|setting:|composition:|camera\/framing:|lighting:|source anchor:/i.test(prompt);
+
+  if (hasDetailedCreativeBrief) {
+    return [
+      "Create a premium, high-end editorial campaign image from this creative director brief.",
+      "Do not include readable text unless the brief explicitly asks for overlay room; leave clean negative space for UI typography.",
+      `Use the brand HEX system: ${palette.primary_hex}, ${palette.secondary_hex}, ${palette.accent_hex}, ${palette.neutral_hex}.`,
+      `Brand tone: ${vibe}.`,
+      visualDna,
+      prompt,
+    ].join(" ");
+  }
+
   return [
     "Create a minimalist, high-end abstract background.",
     "DO NOT include any text, people, or UI elements.",

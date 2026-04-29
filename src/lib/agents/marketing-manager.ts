@@ -6,6 +6,7 @@ import type {
   CampaignEmailDraft,
   CampaignLinkedInPostDraft,
   GovernanceAuditEntry,
+  ManagerWorkflowStep,
   ProductMarketingContext,
   VisualIdentity,
   WorkflowState,
@@ -46,6 +47,7 @@ export interface ManagerOutput {
   logs: string[];
   /** Stable catalog IDs selected for this run (design + channel bundle). */
   selected_skills?: string[];
+  workflow_steps?: ManagerWorkflowStep[];
   governance_entries?: GovernanceAuditEntry[];
 }
 
@@ -61,6 +63,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
 
   const goalKind = classifyGoalKind(input.business_goal, input.success_metric);
   const selected_skills = resolveSkillsForGoal(goalKind, input.carouselMaker === true);
+  const workflow_steps = buildManagerWorkflowSteps(input, selected_skills, input.carouselMaker === true);
 
   if (input.designSystem) {
     logs.push("[Scott]: AI Design Studio synchronized — generating campaigns against locked tokens.");
@@ -107,6 +110,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
       drafts: enhanced.drafts,
       logs,
       selected_skills,
+      workflow_steps,
       governance_entries: [...governance_entries, ...enhanced.governance],
     };
   }
@@ -206,8 +210,94 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
     drafts: enhancedDrafts.drafts,
     logs,
     selected_skills,
+    workflow_steps,
     governance_entries: [...governance_entries, ...enhancedDrafts.governance],
   };
+}
+
+function buildManagerWorkflowSteps(
+  input: ManagerInput,
+  selectedSkills: string[],
+  carouselMaker: boolean,
+): ManagerWorkflowStep[] {
+  const channelPlan = carouselMaker ? "expert Instagram carousel" : "Instagram, LinkedIn, and email";
+  const skillList = selectedSkills.length ? selectedSkills.join(", ") : "content, visual, and QA skills";
+  const goal = input.business_goal ?? "the requested growth objective";
+
+  return [
+    {
+      id: "manager_understands_context",
+      label: "Scott reads context",
+      owner_agent_id: "scott",
+      owner_display_name: "Scott",
+      owner_role: "manager",
+      summary: `Read ${input.companyName} context and frame the job around ${goal}.`,
+      expected_output: "Context-aware manager brief",
+      depends_on: [],
+      completion_step_ids: ["request_received"],
+      completion_log_patterns: ["reading the goal", "demo workflow received"],
+    },
+    {
+      id: "manager_creates_plan",
+      label: "Scott creates plan",
+      owner_agent_id: "scott",
+      owner_display_name: "Scott",
+      owner_role: "manager",
+      summary: `Create a ${channelPlan} plan and choose the specialist skills needed.`,
+      expected_output: "Structured task plan with channel sequence",
+      depends_on: ["manager_understands_context"],
+      completion_step_ids: ["marketing_context_built"],
+      completion_log_patterns: ["breaking the growth objective", "aligning our 7-day strategy"],
+    },
+    {
+      id: "manager_delegates_skills",
+      label: "Scott delegates skills",
+      owner_agent_id: "scott",
+      owner_display_name: "Scott",
+      owner_role: "manager",
+      summary: `Assign ${skillList} to produce copy, creative direction, and QA.`,
+      expected_output: "Specialist assignments",
+      depends_on: ["manager_creates_plan"],
+      completion_step_ids: ["marketing_context_built"],
+      completion_log_patterns: ["assigning"],
+    },
+    {
+      id: "nova_and_skills_produce_drafts",
+      label: "Nova produces drafts",
+      owner_agent_id: "nova",
+      owner_display_name: "Nova",
+      owner_role: "employee",
+      summary: `Turn Scott's brief into channel-ready ${channelPlan} draft content.`,
+      expected_output: "Campaign execution drafts",
+      depends_on: ["manager_delegates_skills"],
+      completion_step_ids: ["campaign_draft_generated"],
+      completion_log_patterns: ["initial drafts packaged", "drafting"],
+    },
+    {
+      id: "nova_generates_visuals",
+      label: "Nova prepares visuals",
+      owner_agent_id: "nova",
+      owner_display_name: "Nova",
+      owner_role: "employee",
+      summary: "Generate visual briefs and image assets from the approved brand direction.",
+      expected_output: "Generated campaign image assets",
+      depends_on: ["nova_and_skills_produce_drafts"],
+      completion_step_ids: ["visual_assets_generated"],
+      completion_log_patterns: ["assets ready", "generating"],
+    },
+    {
+      id: "manager_reviews_package",
+      label: "Scott reviews package",
+      owner_agent_id: "scott",
+      owner_display_name: "Scott",
+      owner_role: "manager",
+      summary: "Review governance, assemble the workspace, and mark the final package ready.",
+      expected_output: "Final growth strategy package",
+      depends_on: ["nova_generates_visuals"],
+      completion_step_ids: ["campaign_package_ready", "workflow_ready"],
+      completion_log_patterns: ["workspace packaged", "workspace is ready"],
+    },
+  ];
 }
 
 function attachStrategicIntent(draft: CampaignExecutionDraft, intent: string): CampaignExecutionDraft {
@@ -395,6 +485,32 @@ function buildDetailedImagePrompt(input: ManagerInput, plan: DiversityPlan, chan
   }. Setting: Sydney or Melbourne startup office with real shipping cues (whiteboards, architecture notes, laptops, code reviews). Composition: medium-wide with layered foreground-to-background depth and a visible execution focal point. Camera/framing: documentary style with natural perspective and no staged corporate poses. Lighting: warm practical office lighting with high-contrast accent highlights. Color palette: ${input.brandKit.primary_hex}, ${input.brandKit.secondary_hex}, ${input.brandKit.accent_hex}. Typography direction: clean, minimal overlays that leave room for headline/CTA. Brand mood: strategic, technical, founder-first, builder-native. Lyra source anchor: ${plan.source_anchor}. Channel context: ${channel}. Optional motif cues: ${motifs}. Avoid: ${avoid}.`;
 }
 
+function buildCarouselSlideCopy(input: ManagerInput, plan: DiversityPlan, sourceAnchor: string) {
+  const mission =
+    input.context.mission_statement ||
+    `${input.companyName} helps high-growth teams turn strategy into shipped work.`;
+  const hook = plan.hook ?? "Builder-native execution";
+
+  return [
+    {
+      headline: hook.length > 30 ? "Look Behind The Build" : hook,
+      body: `${plan.content_angle}. This is the proof frame: ${sourceAnchor}.`,
+    },
+    {
+      headline: "The Real Friction",
+      body: `${plan.buyer_objection} That is the doubt this post has to answer without hype.`,
+    },
+    {
+      headline: "Proof In Motion",
+      body: `${mission.slice(0, 118)}${mission.length > 118 ? "..." : ""}`,
+    },
+    {
+      headline: "Next Step",
+      body: plan.cta_text,
+    },
+  ];
+}
+
 function applyDraftDiversityAndVisualMetadata(
   drafts: CampaignExecutionDraft[],
   input: ManagerInput,
@@ -505,17 +621,26 @@ function applyDraftDiversityAndVisualMetadata(
     const slideNarrative =
       draftPlan.story_frame_sequence ??
       ["Hook", "Proof", "Execution signal", "CTA"];
+    const slideCopy = buildCarouselSlideCopy(input, draftPlan, sourceAnchor);
     const slides = draft.slides.map((slide, slideIdx) => {
       const label = slideNarrative[slideIdx] ?? `Frame ${slideIdx + 1}`;
       const detailed = `${imagePromptDetailed} Frame: ${label}.`;
+      const copy = slideCopy[slideIdx] ?? {
+        headline: `Frame ${slideIdx + 1}`,
+        body: `${draftPlan.content_angle}. ${draftPlan.cta_text}.`,
+      };
       return {
         ...slide,
+        headline: copy.headline,
+        supporting_copy: copy.body,
         visual_direction: `${slide.visual_direction} | ${label}`,
         visual_prompt: detailed,
         design_artifact:
           slide.design_artifact ?
             {
               ...slide.design_artifact,
+              headline: copy.headline,
+              body: copy.body,
               visual_prompt: detailed,
             }
           : slide.design_artifact,
@@ -525,6 +650,11 @@ function applyDraftDiversityAndVisualMetadata(
       ...draft,
       caption: `${draftPlan.hook ?? "Builder-native execution"}\n\n${draftPlan.content_angle}\nSource: ${sourceAnchor}\nCTA: ${draftPlan.cta_text}`,
       slides,
+      card_config: {
+        ...draft.card_config,
+        headline: slides[0]?.headline ?? draft.card_config.headline,
+        subheadline: slides[1]?.supporting_copy ?? draft.card_config.subheadline,
+      },
       meta: {
         ...draft.meta,
         content_angle: draftPlan.content_angle,
