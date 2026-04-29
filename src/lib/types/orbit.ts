@@ -85,6 +85,34 @@ export type DraftStatus =
   | "scheduled"
   | "published";
 
+export type ManagerContentIssueType =
+  | "too_close_to_reference"
+  | "generic_copy"
+  | "unsupported_claim"
+  | "wrong_channel_voice"
+  | "weak_cta"
+  | "repetitive";
+
+export interface ManagerContentIssue {
+  type: ManagerContentIssueType;
+  severity: "low" | "medium" | "high";
+  note: string;
+}
+
+/** Scott-owned deterministic content QA attached to each draft after generation (Phase 3 guardrail). */
+export interface ManagerContentReview {
+  draftId: string;
+  reviewerAgentId: "scott";
+  reviewerDisplayName: "Scott";
+  reviewedAgentId: string;
+  reviewedDisplayName?: string;
+  decision: "approve" | "revise";
+  score: number;
+  issues: ManagerContentIssue[];
+  revisionInstruction?: string;
+  reviewedAt: string;
+}
+
 /** Audit trail entry for goal-driven orchestration and governance exports. */
 export interface GovernanceAuditEntry {
   agent_id: string;
@@ -142,6 +170,8 @@ export interface DraftMetadata {
   /** Target social platform used at publish time (may differ from draft channel during sandbox demos). */
   publish_platform?: "instagram" | "linkedin" | "facebook" | "tiktok";
   deployment_post_id?: string;
+  /** Manager content QA — does not replace human approve/regenerate APIs. */
+  manager_review?: ManagerContentReview;
 }
 
 export interface WebsiteIntelligence {
@@ -399,5 +429,7 @@ export interface WorkflowState {
   campaign_execution_drafts: CampaignExecutionDraft[];
   generated_campaign_assets: GeneratedCampaignAsset[];
   activity_logs: ActivityLog[];
+  /** Final manager review payload per draft (mirrors draft.meta.manager_review for audit exports). */
+  manager_content_reviews?: ManagerContentReview[];
   error_message?: string;
 }

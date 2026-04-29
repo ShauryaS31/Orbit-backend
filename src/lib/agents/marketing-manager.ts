@@ -6,6 +6,8 @@ import type {
   CampaignEmailDraft,
   CampaignLinkedInPostDraft,
   GovernanceAuditEntry,
+  LyraWarmIntelligence,
+  ManagerContentReview,
   ManagerWorkflowStep,
   ProductMarketingContext,
   VisualIdentity,
@@ -20,6 +22,7 @@ import {
   createInstagramCarouselExpertDraft,
   createLinkedInPosterDraft,
 } from "@/lib/skills/formatting-skill";
+import { applyManagerContentReviews } from "@/lib/services/manager-content-review";
 import { createGovernanceEntry } from "@/lib/services/governance-logger";
 import {
   classifyGoalKind,
@@ -40,6 +43,10 @@ export interface ManagerInput {
   business_goal?: string;
   /** Measurable outcome drafts should support. */
   success_metric?: string;
+  /** Founder notes blended upstream — used by manager content guardrail reference checks. */
+  brand_learning_notes?: string[];
+  /** Warm-cache dossier — tightens overlap checks without implying extra crawl. */
+  lyra_warm_intelligence?: LyraWarmIntelligence;
 }
 
 export interface ManagerOutput {
@@ -49,11 +56,37 @@ export interface ManagerOutput {
   selected_skills?: string[];
   workflow_steps?: ManagerWorkflowStep[];
   governance_entries?: GovernanceAuditEntry[];
+  /** Phase 3 — deterministic Scott QA summaries (mirrored on each draft.meta.manager_review). */
+  manager_content_reviews?: ManagerContentReview[];
 }
 
 export interface StrategyDocument {
   filename: "Brand_Strategy_Summary.md" | "Campaign_Brief.md" | "Creative_Brief.md";
   content: string;
+}
+
+function mergeManagerReviewPass(
+  input: ManagerInput,
+  drafts: CampaignExecutionDraft[],
+  governanceSoFar: GovernanceAuditEntry[],
+): {
+  drafts: CampaignExecutionDraft[];
+  governance_entries: GovernanceAuditEntry[];
+  manager_content_reviews: ManagerContentReview[];
+} {
+  const out = applyManagerContentReviews(drafts, {
+    companyName: input.companyName,
+    businessGoal: input.business_goal,
+    successMetric: input.success_metric,
+    brandLearningNotes: input.brand_learning_notes ?? [],
+    lyraWarmIntelligence: input.lyra_warm_intelligence,
+    context: input.context,
+  });
+  return {
+    drafts: out.drafts,
+    governance_entries: [...governanceSoFar, ...out.governance_entries],
+    manager_content_reviews: out.manager_content_reviews,
+  };
 }
 
 export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
@@ -106,12 +139,14 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
       logs,
     );
     logs.push("[Scott · QA skill]: Brand filter complete.");
+    const reviewed = mergeManagerReviewPass(input, enhanced.drafts, [...governance_entries, ...enhanced.governance]);
     return {
-      drafts: enhanced.drafts,
+      drafts: reviewed.drafts,
       logs,
       selected_skills,
       workflow_steps,
-      governance_entries: [...governance_entries, ...enhanced.governance],
+      governance_entries: reviewed.governance_entries,
+      manager_content_reviews: reviewed.manager_content_reviews,
     };
   }
 
@@ -206,12 +241,14 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
   );
   logs.push("[Scott · QA skill]: Brand filter complete.");
 
+  const reviewed = mergeManagerReviewPass(input, enhancedDrafts.drafts, [...governance_entries, ...enhancedDrafts.governance]);
   return {
-    drafts: enhancedDrafts.drafts,
+    drafts: reviewed.drafts,
     logs,
     selected_skills,
     workflow_steps,
-    governance_entries: [...governance_entries, ...enhancedDrafts.governance],
+    governance_entries: reviewed.governance_entries,
+    manager_content_reviews: reviewed.manager_content_reviews,
   };
 }
 

@@ -4,6 +4,7 @@ import { workflowStore } from "@/lib/state/workflow-store";
 import {
   governancePersonaDisplayName,
   NOVAS_RESEARCH_REPORT_TITLE,
+  type ManagerContentReview,
 } from "@/lib/types/orbit";
 
 interface RouteParams {
@@ -268,6 +269,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "| --- | --- | --- | --- | --- |",
     visualRationaleRows || "| - | - | - | - | - |",
     "",
+    buildManagerReviewGuardrailSection(workflow),
     "---",
     "",
     "## 7-Day Campaign Calendar",
@@ -307,4 +309,67 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
 
 function escapePipes(value: string): string {
   return value.replace(/\|/g, "\\|");
+}
+
+function buildManagerReviewGuardrailSection(
+  workflow: NonNullable<ReturnType<typeof workflowStore.getWorkflow>>,
+): string {
+  const fromWorkflow = workflow.manager_content_reviews ?? [];
+  const fromMeta = workflow.campaign_execution_drafts
+    .map((d) => d.meta.manager_review)
+    .filter((r): r is ManagerContentReview => Boolean(r));
+  const list =
+    fromWorkflow.length ? fromWorkflow
+    : fromMeta.length ? fromMeta
+    : [];
+
+  if (list.length === 0) {
+    return [
+      "## Manager Review Guardrail",
+      "",
+      "_No manager content reviews recorded on this workflow yet._",
+      "",
+    ].join("\n");
+  }
+
+  const approved = list.filter((r) => r.decision === "approve").length;
+  const revised = list.filter((r) => r.decision === "revise").length;
+  const avg = list.reduce((s, r) => s + r.score, 0) / list.length;
+
+  const sorted = [...list].sort((a, b) => {
+    const da =
+      workflow.campaign_execution_drafts.find((d) => d.meta.id === a.draftId)?.meta.day ?? 0;
+    const db =
+      workflow.campaign_execution_drafts.find((d) => d.meta.id === b.draftId)?.meta.day ?? 0;
+    return da - db;
+  });
+
+  const rows = sorted
+    .map((r) => {
+      const draft = workflow.campaign_execution_drafts.find((d) => d.meta.id === r.draftId);
+      const day = draft ? String(draft.meta.day) : "-";
+      const channel = draft?.meta.channel ?? "-";
+      const topTypes =
+        r.issues.length ? r.issues.slice(0, 4).map((i) => i.type).join(", ") : "-";
+      const revNote =
+        r.revisionInstruction ?
+          escapePipes(r.revisionInstruction.slice(0, 140)) + (r.revisionInstruction.length > 140 ? "…" : "")
+        : "-";
+      return `| ${day} | ${escapePipes(channel)} | ${r.decision} | ${r.score} | ${escapePipes(topTypes)} | ${revNote} |`;
+    })
+    .join("\n");
+
+  return [
+    "## Manager Review Guardrail",
+    "",
+    `- **Drafts reviewed:** ${list.length}`,
+    `- **Approved:** ${approved}`,
+    `- **Revise:** ${revised}`,
+    `- **Average score:** ${avg.toFixed(1)}`,
+    "",
+    "| Day | Channel | Decision | Score | Top issue types | Revision instruction |",
+    "| --- | --- | --- | --- | --- | --- |",
+    rows,
+    "",
+  ].join("\n");
 }

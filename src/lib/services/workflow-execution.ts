@@ -137,6 +137,8 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     carouselMaker: workflow.carousel_maker_mode === true,
     business_goal: workflow.business_goal,
     success_metric: workflow.success_metric,
+    brand_learning_notes: workflow.brand_learning_notes,
+    lyra_warm_intelligence: workflow.lyra_warm_intelligence,
   });
 
   for (const entry of managerOutput.governance_entries ?? []) {
@@ -207,6 +209,7 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     design_studio_exports: designStudioExports,
     selected_skills: managerOutput.selected_skills,
     manager_workflow_steps: managerOutput.workflow_steps,
+    manager_content_reviews: managerOutput.manager_content_reviews,
   });
 
   workflowStore.addLog(workflowId, {
