@@ -4,17 +4,18 @@ import { regenerateSpecificDraft } from "@/lib/agents/marketing-manager";
 import { workflowStore } from "@/lib/state/workflow-store";
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     id: string;
     draft_id: string;
-  };
+  }>;
 }
 
 interface RegenerateBody {
   reviewer_note?: string;
 }
 
-export async function POST(request: Request, { params }: RouteParams) {
+export async function POST(request: Request, context: RouteParams) {
+  const params = await context.params;
   const workflow = workflowStore.getWorkflow(params.id);
   if (!workflow) {
     return NextResponse.json({ error: "Workflow not found." }, { status: 404 });

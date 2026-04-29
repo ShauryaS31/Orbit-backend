@@ -7,12 +7,13 @@ import {
 } from "@/lib/types/orbit";
 
 interface RouteParams {
-  params: {
+  params: Promise<{
     id: string;
-  };
+  }>;
 }
 
-export async function GET(_request: Request, { params }: RouteParams) {
+export async function GET(_request: Request, context: RouteParams) {
+  const params = await context.params;
   const workflow = workflowStore.getWorkflow(params.id);
   if (!workflow) {
     return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
