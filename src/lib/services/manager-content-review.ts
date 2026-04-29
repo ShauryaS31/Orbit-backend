@@ -67,6 +67,57 @@ function decideFromIssues(score: number, issues: ManagerContentIssue[]): "approv
   return "approve";
 }
 
+/** Maps issue types to concise revision asks for operators and downstream rewrite tooling. */
+const ISSUE_TYPE_REVISION_HINT: Partial<Record<ManagerContentIssue["type"], string>> = {
+  too_close_to_reference: "reduce repeated source-anchor phrasing; keep anchors as citations, not pasted prose",
+  generic_copy: "replace generic AI filler with concrete founder/operator language",
+  unsupported_claim: "remove or qualify metrics and superlatives against approved proof context only",
+  wrong_channel_voice: "tune hook and proof cues to this channel’s audience expectations",
+  weak_cta: "strengthen the CTA with a decisive next step aligned to positioning",
+  repetitive: "vary headline/anchor/CTA repetition across assets while preserving truth",
+};
+
+/**
+ * Builds a non-empty revision instruction for every `decision === "revise"` review.
+ * Uses severity ordering (high → medium → low) so Scott prioritizes blocking gaps.
+ */
+export function buildRevisionInstruction(
+  review: ManagerContentReview,
+  opts: {
+    /** First deterministic rewrite already attempted before this review */
+    rewriteAttempted?: boolean;
+    /** Instruction recorded from {@link rewriteDeterministic} when a rewrite ran */
+    priorRewriteInstruction?: string;
+  } = {},
+): string {
+  const ordered = [...review.issues].sort((a, b) => {
+    const rank = (s: ManagerContentIssue["severity"]) =>
+      s === "high" ? 0 : s === "medium" ? 1 : 2;
+    return rank(a.severity) - rank(b.severity);
+  });
+
+  const top = ordered.slice(0, 4);
+  const hintParts = top.map((i) => {
+    const template = ISSUE_TYPE_REVISION_HINT[i.type];
+    return template ? `${template} (${i.note.split(".")[0]})` : i.note;
+  });
+
+  const issueSentence =
+    hintParts.length > 0 ?
+      hintParts.join("; ")
+    : "tighten proof-led specificity, channel voice, and CTA clarity against guardrail scoring.";
+
+  if (opts.rewriteAttempted && opts.priorRewriteInstruction?.trim()) {
+    const prior = opts.priorRewriteInstruction.trim();
+    const shortened = prior.length > 160 ? `${prior.slice(0, 157)}…` : prior;
+    return (
+      `After one deterministic rewrite (${shortened}), further revision is required: ${issueSentence}`
+    );
+  }
+
+  return `Revise this draft to ${issueSentence}`;
+}
+
 function normalizeWhitespace(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -507,11 +558,20 @@ export function applyManagerContentReviews(
       draft = revised;
 
       const second = reviewDraftAsManager({ draft, allDrafts: working, ctx });
-      finals.push({
-        ...second,
-        revisionInstruction: instruction,
-      });
-      working[i] = attachReviewMeta(draft, second);
+
+      const mergedReview: ManagerContentReview =
+        second.decision === "revise" ?
+          {
+            ...second,
+            revisionInstruction: buildRevisionInstruction(second, {
+              rewriteAttempted: true,
+              priorRewriteInstruction: instruction,
+            }),
+          }
+        : second;
+
+      finals.push(mergedReview);
+      working[i] = attachReviewMeta(draft, mergedReview);
     } else {
       finals.push(review);
       working[i] = attachReviewMeta(draft, review);
