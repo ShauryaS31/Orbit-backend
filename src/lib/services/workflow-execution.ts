@@ -36,6 +36,21 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     }
   }
 
+  if (workflow.lyra_warm_intelligence) {
+    appendGovernanceLog(
+      workflowId,
+      createGovernanceEntry({
+        agent_id: "researcher",
+        step_id: "website_intelligence_gathered",
+        decision: "Used approved Lyra warm intelligence cache in demo mode.",
+        rationale:
+          "Known-company demo workflow benefits from stable public research anchors so Nova/Scott outputs remain concrete and non-generic without implying live private scraping.",
+        resulting_asset: "website_intelligence",
+        source_url: workflow.company_url,
+      }),
+    );
+  }
+
   workflowStore.addLog(workflowId, {
     role: "researcher",
     step_id: "brand_profile_loaded",
@@ -161,7 +176,7 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     brandKit: workflow.brand_kit,
     context: workflow.product_marketing_context,
     visualIdentity: workflow.visual_identity,
-  });
+  }, draftsWithStudio);
 
   workflowStore.updateWorkflow(workflowId, {
     status: "running",
@@ -264,6 +279,7 @@ function describeDesignArtifactBundle(skillIds: string[]): string {
 async function generateVisualAssets(
   workflowId: string,
   managerInput: Parameters<typeof runMarketingManagerAgent>[0],
+  drafts: CampaignExecutionDraft[],
 ): Promise<GeneratedCampaignAsset[]> {
   const days: Array<1 | 3 | 5> = [1, 3, 5];
   const assets: GeneratedCampaignAsset[] = [];
@@ -287,6 +303,9 @@ async function generateVisualAssets(
         managerInput.brandKit,
         managerInput.visualIdentity,
       );
+      const sourceDraft = drafts.find(
+        (draft) => draft.meta.day === day && draft.meta.channel === "instagram",
+      );
 
       assets.push({
         id: crypto.randomUUID(),
@@ -294,6 +313,11 @@ async function generateVisualAssets(
         platform: "instagram",
         day,
         prompt: response.full_prompt,
+        image_prompt_detailed:
+          sourceDraft?.meta.image_prompt_detailed ?? response.full_prompt,
+        negative_prompt: sourceDraft?.meta.negative_prompt,
+        visual_source_anchor: sourceDraft?.meta.visual_source_anchor,
+        visual_style_notes: sourceDraft?.meta.visual_style_notes,
         image_url: response.image_url,
         created_at: new Date().toISOString(),
       });

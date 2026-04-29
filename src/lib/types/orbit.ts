@@ -106,6 +106,32 @@ export interface DraftMetadata {
   original_prompt: string;
   /** How this draft ladders to `WorkflowState.success_metric` / business goals. */
   strategic_intent?: string;
+  /** Diversity system label to reduce repetitive cross-channel content. */
+  content_angle?: string;
+  /** Concrete evidence point used to ground this draft (Lyra cache or live proof). */
+  source_anchor?: string;
+  /** Which buyer objection this draft resolves. */
+  buyer_objection?: string;
+  /** Channel-specific intent for this draft (proof-led, narrative-led, conversion-led). */
+  channel_strategy?: string;
+  /** CTA language style to avoid repeating the same phrasing. */
+  cta_style?: string;
+  /** Detailed visual prompt payload for creative rendering and QA. */
+  image_prompt_detailed?: string;
+  /** Negative prompt guardrails for visuals. */
+  negative_prompt?: string;
+  /** Source anchor used to inform visual treatment. */
+  visual_source_anchor?: string;
+  /** Visual style direction for generator and reviewer alignment. */
+  visual_style_notes?: string;
+  /** Instagram-specific hook line. */
+  hook?: string;
+  /** Instagram/story visual concept summary. */
+  visual_concept?: string;
+  /** Optional sequence for story/reel style narrative frames. */
+  story_frame_sequence?: string[];
+  /** Optional explicit CTA copy used in post caption/body. */
+  cta_text?: string;
   /** True when draft was produced by Carousel Maker (10-slide Duncan Rogoff / Canva-Killer expert pass). */
   carousel_expert_mode?: boolean;
   reviewer_note?: string;
@@ -292,8 +318,26 @@ export interface GeneratedCampaignAsset {
   platform: "instagram" | "linkedin" | "email";
   day: 1 | 3 | 5;
   prompt: string;
+  image_prompt_detailed?: string;
+  negative_prompt?: string;
+  visual_source_anchor?: string;
+  visual_style_notes?: string;
   image_url: string;
   created_at: string;
+}
+
+export interface LyraWarmIntelligence {
+  cache_label: string;
+  cache_source: string;
+  core_positioning: string;
+  buyer_belief: string;
+  audience_segments: string[];
+  proof_points: string[];
+  content_angles: string[];
+  brand_voice: string[];
+  visual_motifs: string[];
+  avoid_list: string[];
+  source_anchors: string[];
 }
 
 export type CampaignExecutionDraft =
@@ -320,6 +364,8 @@ export interface WorkflowState {
   consultant_discovery?: ConsultantDiscoveryMetadata;
   /** Stable skill IDs last chosen by Marketing Manager (goal-driven orchestration). */
   selected_skills?: string[];
+  /** Optional structured warm cache used in demo mode for known company profiles. */
+  lyra_warm_intelligence?: LyraWarmIntelligence;
   /** When true, campaign generation runs-design-first expert carousel (10 slides) instead of generalist 7-day mix. */
   carousel_maker_mode?: boolean;
   website_intelligence?: WebsiteIntelligence;

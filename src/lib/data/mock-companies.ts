@@ -477,8 +477,17 @@ export function findMockCompanyByUrl(
   companyUrl: string,
 ): MockCompanyProfile | undefined {
   const normalizedInput = normalizeUrl(companyUrl);
-  return MOCK_COMPANIES.find((company) => {
+  const exact = MOCK_COMPANIES.find((company) => {
     return normalizeUrl(company.company_url) === normalizedInput;
+  });
+  if (exact) return exact;
+
+  const loose = companyUrl.trim().toLowerCase();
+  return MOCK_COMPANIES.find((company) => {
+    const normalizedCompany = normalizeUrl(company.company_url);
+    const host = normalizedCompany.replace(/^https?:\/\//, "");
+    const key = host.split(".")[0];
+    return loose.includes(host) || loose.includes(key);
   });
 }
 
