@@ -1,4 +1,4 @@
-# Orbit API — Handover for UI (Lovable)
+# Orbit API - Handover for UI (Lovable)
 
 Base URL matches your deployed Next.js host (local default: `http://localhost:3000`). All routes return JSON unless noted.
 
@@ -11,9 +11,9 @@ Two primary characters surface in **`activity_logs` messages**, **`governance_lo
 | **Nova** | `researcher` | Brand Research Intern |
 | **Scott** | `marketing_manager` | Marketing Manager |
 
-Specialist pipelines (**Content**, **Visual**, **Carousel**, **QA/analyst/copywriter** in logs) remain **internal `AgentRole` ids** — present them in the UI as **skills/tools Scott delegates** (“Manager-owned tools”), not separate named characters.
+Specialist pipelines (**Content**, **Visual**, **Carousel**, **QA/analyst/copywriter** in logs) remain **internal `AgentRole` ids** - present them in the UI as **skills/tools Scott delegates** ("Manager-owned tools"), not separate named characters.
 
-Discovery packaging includes **`consultant_discovery.research_report_title`** (default **Nova's Research Report**) so founders review Nova’s crawl output before Scott runs strategy.
+Discovery packaging includes **`consultant_discovery.research_report_title`** (default **Nova's Research Report**) so founders review Nova's crawl output before Scott runs strategy.
 
 ### Frontend teammate checklist (Consultant Mode UI)
 
@@ -23,7 +23,7 @@ Discovery packaging includes **`consultant_discovery.research_report_title`** (d
 | Governance persona label | `governance_log[].display_agent_name` (Nova \| Scott); keep internal `agent_id` + `step_id` for audit rows |
 | Visible skill routing | `selected_skills` |
 | Per-draft rationale | `campaign_execution_drafts[].meta.strategic_intent` |
-| Raw React/Tailwind artifact | `campaign_execution_drafts[].studio_react_export` (carousel) — **must not be `eval`’d or compiled in the browser**; show as a static Design Artifact code panel with syntax highlighting |
+| Raw React/Tailwind artifact | `campaign_execution_drafts[].studio_react_export` (carousel) - **must not be `eval`'d or compiled in the browser**; show as a static Design Artifact code panel with syntax highlighting |
 
 Preview UI should render from structured draft fields (headlines, body, palette hex from `brand_kit` / `design_system`, linked `generated_campaign_assets[].image_url`), not from executing `studio_react_export`.
 
@@ -35,7 +35,7 @@ Preview UI should render from structured draft fields (headlines, body, palette 
 
 ## 1. `GET /api/workflows/[id]`
 
-**Purpose:** Load the full workflow payload for Consultant Mode — discovery outputs (`website_intelligence`, `intelligence_validation` with premium fields like `confidence_score` 0–100, `visual_palette_rationale`, `brand_voice_descriptors`), optional **`consultant_discovery`** (`research_report_title` for Nova’s discovery framing), `brand_kit`, `product_marketing_context`, optional goal fields (`business_goal`, `success_metric`), optional `brand_learning_notes`, append-only `governance_log` (includes **`display_agent_name`**: Nova \| Scott alongside stable **`agent_id`**), optional `selected_skills`, `campaign_execution_drafts`, `generated_campaign_assets`, `activity_logs`, and status.
+**Purpose:** Load the full workflow payload for Consultant Mode - discovery outputs (`website_intelligence`, `intelligence_validation` with premium fields like `confidence_score` 0-100, `visual_palette_rationale`, `brand_voice_descriptors`), optional **`consultant_discovery`** (`research_report_title` for Nova's discovery framing), `brand_kit`, `product_marketing_context`, optional goal fields (`business_goal`, `success_metric`), optional `brand_learning_notes`, append-only `governance_log` (includes **`display_agent_name`**: Nova \| Scott alongside stable **`agent_id`**), optional `selected_skills`, `campaign_execution_drafts`, `generated_campaign_assets`, `activity_logs`, and status.
 
 **Use when:** Hydrating dashboard panels, draft review UI, or asset galleries after `marketing/start` returns a workflow id.
 
@@ -57,7 +57,7 @@ Preview UI should render from structured draft fields (headlines, body, palette 
 
 ## 3. `POST /api/workflows/[id]/validate`
 
-**Purpose:** Founder/consultant approval of discovery — kicks off campaign execution.
+**Purpose:** Founder/consultant approval of discovery - kicks off campaign execution.
 
 **Body (one of):**
 
@@ -79,7 +79,7 @@ or
 
 ## 4. `POST /api/workflows/[id]/publish`
 
-**Purpose:** Schedule or publish an **approved** draft through the Social Orchestrator (Ayrshare when `SOCIAL_SANDBOX` is false; instant sandbox mock when true).
+**Purpose:** Schedule or publish a draft through the Social Orchestrator (Ayrshare when `SOCIAL_SANDBOX` is false; instant sandbox mock when true).
 
 **Body:**
 
@@ -95,7 +95,27 @@ or
 
 **Sandbox (`SOCIAL_SANDBOX=true`):** Response includes `mock_deployment_data` (`status`, `platform_link`, `confirmation_message`) for premium UI previews without hitting external APIs.
 
-**Use when:** Deploy step after drafts are approved — surfaces deployment IDs and sandbox preview links.
+**Use when:** Deploy step after drafts are approved - surfaces deployment IDs and sandbox preview links.
+
+### Publish approval behavior
+
+- Non-sandbox (`SOCIAL_SANDBOX=false`): publish requires draft-level approval (`meta.status === "approved"`).
+- Sandbox (`SOCIAL_SANDBOX=true`): publish allows a provided `draft_id` even if the draft-specific approve route was not called yet.
+- This keeps demo flow reliable with Option A:
+  - `validate workflow` -> `publish selected draft`
+- Option B also remains supported:
+  - `validate workflow` -> `approve draft` -> `publish selected draft`
+
+### Workflow persistence behavior
+
+- Workflow state is in-memory (`workflowStore`).
+- Workflows do not survive backend restart.
+- In `next dev`, hot reload/recompile can clear in-memory workflow state.
+- For stable demo testing:
+  - `npm run clean`
+  - `npm run build`
+  - `SOCIAL_SANDBOX=true`
+  - `npx next start -p 3000`
 
 ---
 

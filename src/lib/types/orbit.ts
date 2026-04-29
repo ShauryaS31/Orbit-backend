@@ -18,7 +18,7 @@ export type AgentRole =
   | "visual_agent"
   | "carousel_specialist";
 
-/** Consultant Mode UI labels — internal `AgentRole` values are unchanged. */
+/** Consultant Mode UI labels - internal `AgentRole` values are unchanged. */
 export interface AgentUiDisplay {
   display_name: "Nova" | "Scott";
   display_role: string;
@@ -29,7 +29,7 @@ export const AGENT_UI_DISPLAY: Partial<Record<AgentRole, AgentUiDisplay>> = {
   marketing_manager: { display_name: "Scott", display_role: "Marketing Manager" },
 };
 
-/** Surfaced in UI copy as specialist capabilities Scott delegates (“Manager-owned tools”). */
+/** Surfaced in UI copy as specialist capabilities Scott delegates ("Manager-owned tools"). */
 export const SCOTT_OWNED_SKILL_ROLES: readonly AgentRole[] = [
   "content_specialist",
   "visual_agent",
@@ -144,7 +144,7 @@ export interface WebsiteIntelligence {
 }
 
 export interface CompanyIntelligenceValidation {
-  /** Aggregated discovery confidence on a 0–100 scale (Consultant Mode index). */
+  /** Aggregated discovery confidence on a 0-100 scale (Consultant Mode index). */
   confidence_score: number;
   confidence_levels?: {
     company_name: "high" | "medium" | "low";
@@ -158,7 +158,7 @@ export interface CompanyIntelligenceValidation {
   reviewer_notes: string;
   /** Two concise sentences explaining why the inferred HEX palette fits this brand's surface hierarchy. */
   visual_palette_rationale?: string;
-  /** 3–5 adjectives capturing perceived brand voice from positioning + audience signals. */
+  /** 3-5 adjectives capturing perceived brand voice from positioning + audience signals. */
   brand_voice_descriptors?: string[];
   brand_palette?: {
     primary: string;
@@ -181,7 +181,7 @@ export interface BrandKit {
   tone_of_voice: string[];
 }
 
-/** Claude-style structured brand UI tokens ("AI Design Studio") — generated via researcher.generateDesignSystem. */
+/** Claude-style structured brand UI tokens ("AI Design Studio") - generated via researcher.generateDesignSystem. */
 export interface BrandDesignSystem {
   primary_palette: Array<{ hex: string; label?: string }>;
   secondary_palette: Array<{ hex: string; label?: string }>;
@@ -316,7 +316,7 @@ export interface WorkflowState {
   brand_learning_notes?: string[];
   /** Append-only governance trail for audits and `/report`. */
   governance_log?: GovernanceAuditEntry[];
-  /** Consultant Mode — discovery framing so founders review Nova before Scott executes strategy. */
+  /** Consultant Mode - discovery framing so founders review Nova before Scott executes strategy. */
   consultant_discovery?: ConsultantDiscoveryMetadata;
   /** Stable skill IDs last chosen by Marketing Manager (goal-driven orchestration). */
   selected_skills?: string[];

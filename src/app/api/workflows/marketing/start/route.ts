@@ -83,24 +83,24 @@ export async function POST(request: Request) {
     workflowStore.addLog(workflowId, {
       role: "marketing_manager",
       step_id: "request_received",
-      message: "[Scott]: Demo workflow received — Nova's cached discovery is staged.",
+      message: "[Scott]: Demo workflow received - Nova's cached discovery is staged.",
     });
     workflowStore.addLog(workflowId, {
       role: "researcher",
       step_id: "website_intelligence_gathered",
       message:
-        "[Nova]: Pulled discovery from warm cache — signals organized for Scott under Nova's Research Report.",
+        "[Nova]: Pulled discovery from warm cache - signals organized for Scott under Nova's Research Report.",
     });
     workflowStore.addLog(workflowId, {
       role: "analyst",
       step_id: "validation_completed",
       message:
-        "[Scott · QA skill]: Validation snapshot looks launch-ready — Nova's palette thesis checks out.",
+        "[Scott - QA skill]: Validation snapshot looks launch-ready - Nova's palette thesis checks out.",
     });
     workflowStore.addLog(workflowId, {
       role: "strategist",
       step_id: "marketing_context_built",
-      message: "[Scott]: Product marketing context assembled — handing off from Nova's findings.",
+      message: "[Scott]: Product marketing context assembled - handing off from Nova's findings.",
     });
     await runCampaignGeneration(workflowId);
 
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
   workflowStore.addLog(workflowId, {
     role: "marketing_manager",
     step_id: "request_received",
-    message: "[Scott]: Workflow started — Nova is crawling your site for Consultant Mode.",
+    message: "[Scott]: Workflow started - Nova is crawling your site for Consultant Mode.",
   });
 
   try {
@@ -161,7 +161,7 @@ export async function POST(request: Request) {
       role: "researcher",
       step_id: "validation_completed",
       message:
-        `[Nova]: Discovery complete — review ${NOVAS_RESEARCH_REPORT_TITLE} before Scott runs strategy.`,
+        `[Nova]: Discovery complete - review ${NOVAS_RESEARCH_REPORT_TITLE} before Scott runs strategy.`,
     });
   } catch (error) {
     workflowStore.updateWorkflow(workflowId, {
@@ -171,7 +171,7 @@ export async function POST(request: Request) {
     workflowStore.addLog(workflowId, {
       role: "researcher",
       step_id: "validation_completed",
-      message: `[Nova]: Discovery failed — ${(error as Error).message}`,
+      message: `[Nova]: Discovery failed - ${(error as Error).message}`,
     });
   }
 

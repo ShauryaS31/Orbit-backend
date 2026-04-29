@@ -29,10 +29,10 @@ export async function GET(_request: Request, { params }: RouteParams) {
 
 function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowStore.getWorkflow>>): string {
   const company = workflow.website_intelligence?.company_name ?? "Unknown Company";
-  const mission = workflow.product_marketing_context?.mission_statement ?? "—";
-  const audience = workflow.website_intelligence?.audience_summary ?? "—";
-  const tone = workflow.brand_kit?.tone_of_voice.join(", ") ?? "—";
-  const sopFocus = workflow.product_marketing_context?.sop_focus.join(", ") ?? "—";
+  const mission = workflow.product_marketing_context?.mission_statement ?? "-";
+  const audience = workflow.website_intelligence?.audience_summary ?? "-";
+  const tone = workflow.brand_kit?.tone_of_voice.join(", ") ?? "-";
+  const sopFocus = workflow.product_marketing_context?.sop_focus.join(", ") ?? "-";
   const iv = workflow.intelligence_validation;
   const confidencePct =
     typeof iv?.confidence_score === "number" ? Math.round(iv.confidence_score) : null;
@@ -45,13 +45,13 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
   const voiceDescriptors =
     iv?.brand_voice_descriptors?.length ?
       iv.brand_voice_descriptors.join(", ")
-    : workflow.brand_kit?.tone_of_voice.join(", ") ?? "—";
+    : workflow.brand_kit?.tone_of_voice.join(", ") ?? "-";
   const visualSignals = workflow.website_intelligence?.visual_signals;
   const visualIdentity = workflow.visual_identity;
 
   const strategicBlockquote =
-    `Orbit interprets **${company}** as pursuing "${mission.slice(0, 220)}${mission.length > 220 ? "…" : ""}" ` +
-    `with primary traction among audiences summarized as: ${audience.slice(0, 280)}${audience.length > 280 ? "…" : ""} ` +
+    `Orbit interprets **${company}** as pursuing "${mission.slice(0, 220)}${mission.length > 220 ? "..." : ""}" ` +
+    `with primary traction among audiences summarized as: ${audience.slice(0, 280)}${audience.length > 280 ? "..." : ""} ` +
     `Messaging emphasis should reinforce **${sopFocus}** while sustaining voice cues aligned to **${voiceDescriptors}**.`;
 
   const calendarRows = workflow.campaign_execution_drafts
@@ -96,13 +96,13 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
         : draft.type === "linkedin_post" ?
           draft.headline
         : draft.subject_line;
-      const platform = draft.meta.publish_platform ?? "—";
-      const postId = draft.meta.deployment_post_id ?? "—";
-      const when = draft.meta.scheduled_at ?? "—";
+      const platform = draft.meta.publish_platform ?? "-";
+      const postId = draft.meta.deployment_post_id ?? "-";
+      const when = draft.meta.scheduled_at ?? "-";
       const pub =
         draft.meta.is_published === true ? "Live"
         : draft.meta.status === "scheduled" ? "Queued"
-        : "—";
+        : "-";
       return `| Day ${draft.meta.day} | ${draft.meta.channel} | ${escapePipes(platform)} | ${draft.meta.status} | ${escapePipes(pub)} | ${escapePipes(when)} | ${escapePipes(postId)} | ${escapePipes(headline)} |`;
     })
     .join("\n");
@@ -116,10 +116,10 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
           draft.meta.status === "approved" ||
           draft.meta.status === "scheduled" ||
           draft.meta.status === "published" ?
-            "Approve creative → Schedule via Orbit publish API"
+            "Approve creative -> Schedule via Orbit publish API"
           : draft.meta.status === "revision_requested" ?
-            "Address reviewer notes → Request regeneration"
-          : "Review draft → Approve or request revision"
+            "Address reviewer notes -> Request regeneration"
+          : "Review draft -> Approve or request revision"
         : "Await draft generation";
       const checked =
         draft?.meta.status === "approved" ||
@@ -129,7 +129,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
         : "[ ]";
       const label =
         draft ?
-          `${draft.meta.channel} · ${draft.meta.status}`
+          `${draft.meta.channel} - ${draft.meta.status}`
         : "draft not generated";
       return `| Day ${day} | ${channel} | ${escapePipes(action)} | ${checked} | ${escapePipes(label)} |`;
     })
@@ -147,7 +147,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
         ...(workflow.governance_log ?? []).map((g) => {
           const persona =
             g.display_agent_name ?? governancePersonaDisplayName(g.agent_id);
-          return `| ${escapePipes(persona)} | ${escapePipes(g.agent_id)} | ${escapePipes(g.step_id)} | ${escapePipes(g.decision)} | ${escapePipes(g.rationale)} | ${escapePipes(g.resulting_asset ?? "—")} | ${escapePipes(g.timestamp)} | ${escapePipes(g.source_url ?? "—")} |`;
+          return `| ${escapePipes(persona)} | ${escapePipes(g.agent_id)} | ${escapePipes(g.step_id)} | ${escapePipes(g.decision)} | ${escapePipes(g.rationale)} | ${escapePipes(g.resulting_asset ?? "-")} | ${escapePipes(g.timestamp)} | ${escapePipes(g.source_url ?? "-")} |`;
         }),
       ].join("\n");
 
@@ -158,7 +158,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
       "Palette aligned to scraped signals and consultant inference where sampling was incomplete.";
 
   const sections = [
-    `# Agency Audit · ${company}`,
+    `# Agency Audit - ${company}`,
     "",
     "---",
     "",
@@ -168,7 +168,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     `### ${researchReportTitle}`,
     "",
-    `_Consultant Mode:_ Discovery findings below are framed as **${researchReportTitle}** — founders review Nova before Scott executes strategy.`,
+    `_Consultant Mode:_ Discovery findings below are framed as **${researchReportTitle}** - founders review Nova before Scott executes strategy.`,
     "",
     "> **Consultant synthesis:**",
     "> ",
@@ -178,7 +178,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     "| Signal | Consultant reading |",
     "| --- | --- |",
-    `| Confidence index | **${confidencePct ?? "—"}** / 100 (automated tier blend + site sampling depth) |`,
+    `| Confidence index | **${confidencePct ?? "-"}** / 100 (automated tier blend + site sampling depth) |`,
     `| Brand voice descriptors | ${escapePipes(voiceDescriptors)} |`,
     "",
     "### Palette rationale",
@@ -189,9 +189,9 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     "| Role | HEX | Notes |",
     "| --- | --- | --- |",
-    `| Primary | ${palette.primary ?? "—"} | Dominant surfaces / hero treatments |`,
-    `| Secondary | ${palette.secondary ?? "—"} | Editorial UI density & whitespace pairing |`,
-    `| Accent | ${palette.accent ?? "—"} | Conversion emphasis & highlights |`,
+    `| Primary | ${palette.primary ?? "-"} | Dominant surfaces / hero treatments |`,
+    `| Secondary | ${palette.secondary ?? "-"} | Editorial UI density & whitespace pairing |`,
+    `| Accent | ${palette.accent ?? "-"} | Conversion emphasis & highlights |`,
     "",
     "---",
     "",
@@ -202,7 +202,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     `| Workflow ID | \`${workflow.id}\` |`,
     `| Source URL | ${workflow.company_url} |`,
     `| Pipeline status | **${workflow.status}** |`,
-    "| Horizon | 7-day sequence · founder approvals gate automation |",
+    "| Horizon | 7-day sequence - founder approvals gate automation |",
     "",
     "### Brand narrative anchors",
     "",
@@ -213,12 +213,12 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     "## Governance & Strategic Audit",
     "",
-    "**Logic chain:** `[Business Goal]` → `[Agent Decision]` → `[Resulting Asset]`",
+    "**Logic chain:** `[Business Goal]` -> `[Agent Decision]` -> `[Resulting Asset]`",
     "",
     "| Anchor | Value |",
     "| --- | --- |",
-    `| Business goal | ${escapePipes(workflow.business_goal ?? "—")} |`,
-    `| Success metric | ${escapePipes(workflow.success_metric ?? "—")} |`,
+    `| Business goal | ${escapePipes(workflow.business_goal ?? "-")} |`,
+    `| Success metric | ${escapePipes(workflow.success_metric ?? "-")} |`,
     "",
     govTable,
     "",
@@ -229,8 +229,8 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     `| Theme color hook | ${visualSignals?.theme_color ?? "Not surfaced"} |`,
     `| Favicon signal | ${visualSignals?.favicon_url ?? "Not discovered"} |`,
     `| Visual posture | ${visualIdentity?.visual_tone ?? "Pending enrichment"} |`,
-    `| Spatial grammar | ${visualIdentity?.design_patterns.join("; ") ?? "—"} |`,
-    `| Typography posture | ${visualIdentity?.typography_vibes.join("; ") ?? "—"} |`,
+    `| Spatial grammar | ${visualIdentity?.design_patterns.join("; ") ?? "-"} |`,
+    `| Typography posture | ${visualIdentity?.typography_vibes.join("; ") ?? "-"} |`,
     "",
     "---",
     "",
@@ -238,7 +238,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     "| Day | Channel | Draft status | Headline / subject |",
     "| --- | --- | --- | --- |",
-    calendarRows || "| — | — | — | Drafts pending pipeline completion |",
+    calendarRows || "| - | - | - | Drafts pending pipeline completion |",
     "",
     "## Generated visual assets",
     "",
@@ -249,13 +249,13 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "| Day | Channel | Target platform | Draft status | Ship state | Scheduled / deployed | Post ID | Asset headline |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
     deploymentRows ||
-      "| — | — | — | — | — | — | — | No deployments queued yet |",
+      "| - | - | - | - | - | - | - | No deployments queued yet |",
     "",
     "---",
     "",
     "## 7-Day Deployment Checklist",
     "",
-    "_Complete rows top-down — approvals unlock orchestrator scheduling._",
+    "_Complete rows top-down - approvals unlock orchestrator scheduling._",
     "",
     "| Day | Channel | Required action | Done | Proof state |",
     "| --- | --- | --- | --- | --- |",
@@ -263,7 +263,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     "---",
     "",
-    `_Generated ${new Date().toISOString()} · Orbit Consultant Mode export._`,
+    `_Generated ${new Date().toISOString()} - Orbit Consultant Mode export._`,
   ];
 
   return sections.join("\n");

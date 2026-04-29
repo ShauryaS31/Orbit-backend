@@ -98,7 +98,8 @@ export async function POST(request: Request, { params }: RouteParams) {
     return NextResponse.json({ error: "Draft not found." }, { status: 404 });
   }
 
-  if (draft.meta.status !== "approved") {
+  const sandbox = process.env.SOCIAL_SANDBOX === "true";
+  if (draft.meta.status !== "approved" && !sandbox) {
     return NextResponse.json(
       { error: "Draft must be approved before publishing." },
       { status: 400 },
@@ -125,8 +126,6 @@ export async function POST(request: Request, { params }: RouteParams) {
   const content = getDraftPlainText(draft);
   const imageUrl = resolveDraftImageUrl(workflow, draft);
 
-  const sandbox = process.env.SOCIAL_SANDBOX === "true";
-
   if (!sandbox && isAyrshareProductionBlocked()) {
     return NextResponse.json(
       {
@@ -140,7 +139,10 @@ export async function POST(request: Request, { params }: RouteParams) {
   workflowStore.addLog(params.id, {
     role: "orchestrator",
     step_id: "social_deployed",
-    message: "[Scott]: Handshaking deployment bridge — scheduling your approved draft.",
+    message:
+      sandbox && draft.meta.status !== "approved"
+        ? "[Scott]: Sandbox deployment allowed without draft-level approve for demo reliability."
+        : "[Scott]: Handshaking deployment bridge - scheduling your approved draft.",
     metadata: { draft_id: draftId, publish_platform: platform },
   });
 

@@ -37,8 +37,8 @@ export async function POST(request: Request, { params }: RouteParams) {
     role: "marketing_manager",
     step_id: "validation_completed",
     message: hasAnswers
-      ? "[Scott]: Founder answered Nova's prompts — standing by to run execution with specialist skills."
-      : "[Scott]: Founder approved Nova's research — kicking off execution now.",
+      ? "[Scott]: Founder answered Nova's prompts - standing by to run execution with specialist skills."
+      : "[Scott]: Founder approved Nova's research - kicking off execution now.",
     metadata: hasAnswers ? { answers: body.answers } : undefined,
   });
 
