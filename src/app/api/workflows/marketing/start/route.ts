@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { fuseBrandIntelligence, validateIntelligence } from "@/lib/agents/researcher";
+import {
+  applyLyraWarmIntelligenceToProfile,
+  isLyraCompanyUrl,
+  LYRA_WARM_INTELLIGENCE,
+} from "@/lib/data/lyra-brand-intelligence";
 import { findMockCompanyByUrl } from "@/lib/data/mock-companies";
 import { scrapeWebsiteIntelligence } from "@/lib/services/web-scraper";
 import { runCampaignGeneration } from "@/lib/services/workflow-execution";
@@ -50,6 +55,7 @@ export async function POST(request: Request) {
   const workflowId = crypto.randomUUID();
 
   if (demoMode) {
+    const lyraMode = isLyraCompanyUrl(companyUrl);
     const mockCompany = findMockCompanyByUrl(companyUrl);
     if (!mockCompany) {
       return NextResponse.json(
@@ -57,6 +63,15 @@ export async function POST(request: Request) {
         { status: 404 },
       );
     }
+    const warmProfile =
+      lyraMode ?
+        applyLyraWarmIntelligenceToProfile({
+          website_intelligence: mockCompany.website_intelligence,
+          intelligence_validation: mockCompany.intelligence_validation,
+          brand_kit: mockCompany.brand_kit,
+          product_marketing_context: mockCompany.product_marketing_context,
+        })
+      : null;
 
     const initialState: Omit<WorkflowState, "created_at" | "updated_at"> = {
       id: workflowId,
@@ -67,10 +82,11 @@ export async function POST(request: Request) {
       ...(businessGoal ? { business_goal: businessGoal } : {}),
       ...(successMetric ? { success_metric: successMetric } : {}),
       ...(brandLearningNotes?.length ? { brand_learning_notes: brandLearningNotes } : {}),
-      website_intelligence: mockCompany.website_intelligence,
-      intelligence_validation: mockCompany.intelligence_validation,
-      brand_kit: mockCompany.brand_kit,
-      product_marketing_context: mockCompany.product_marketing_context,
+      website_intelligence: warmProfile?.website_intelligence ?? mockCompany.website_intelligence,
+      intelligence_validation: warmProfile?.intelligence_validation ?? mockCompany.intelligence_validation,
+      brand_kit: warmProfile?.brand_kit ?? mockCompany.brand_kit,
+      product_marketing_context: warmProfile?.product_marketing_context ?? mockCompany.product_marketing_context,
+      ...(lyraMode ? { lyra_warm_intelligence: LYRA_WARM_INTELLIGENCE } : {}),
       campaign_execution_drafts: [],
       generated_campaign_assets: [],
       activity_logs: [],
@@ -85,6 +101,26 @@ export async function POST(request: Request) {
       step_id: "request_received",
       message: "[Scott]: Demo workflow received - Nova's cached discovery is staged.",
     });
+    if (lyraMode) {
+      workflowStore.addLog(workflowId, {
+        role: "researcher",
+        step_id: "website_intelligence_gathered",
+        message:
+          "[Nova]: Pulling Lyra warm intelligence from the approved demo research cache...",
+      });
+      workflowStore.addLog(workflowId, {
+        role: "researcher",
+        step_id: "website_intelligence_gathered",
+        message:
+          "[Nova]: Found Lyra proof anchors: Fellowship, Lyrathon, Anthropic, Melbourne expansion, and client delivery examples.",
+      });
+      workflowStore.addLog(workflowId, {
+        role: "researcher",
+        step_id: "website_intelligence_gathered",
+        message:
+          "[Nova]: Organizing Lyra's culture-to-execution positioning for Scott's review.",
+      });
+    }
     workflowStore.addLog(workflowId, {
       role: "researcher",
       step_id: "website_intelligence_gathered",

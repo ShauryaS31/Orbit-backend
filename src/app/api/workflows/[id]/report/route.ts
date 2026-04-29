@@ -74,10 +74,29 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
       workflow.generated_campaign_assets
         .map(
           (asset) =>
-            `- **Day ${asset.day}** (${asset.platform}): [open asset](${asset.image_url})`,
+            `- **Day ${asset.day}** (${asset.platform}): [open asset](${asset.image_url})` +
+            ` — anchor: ${asset.visual_source_anchor ?? "n/a"}`,
         )
         .join("\n")
     : "_No generated visuals attached yet._";
+  const warmAnchors =
+    workflow.lyra_warm_intelligence?.source_anchors?.length ?
+      workflow.lyra_warm_intelligence.source_anchors.map((anchor) => `- ${anchor}`).join("\n")
+    : "_No warm proof anchors attached._";
+  const diversityRows = workflow.campaign_execution_drafts
+    .slice()
+    .sort((a, b) => a.meta.day - b.meta.day)
+    .map(
+      (draft) =>
+        `| Day ${draft.meta.day} | ${draft.meta.channel} | ${escapePipes(draft.meta.content_angle ?? "-")} | ${escapePipes(draft.meta.source_anchor ?? "-")} | ${escapePipes(draft.meta.buyer_objection ?? "-")} | ${escapePipes(draft.meta.channel_strategy ?? "-")} | ${escapePipes(draft.meta.cta_style ?? "-")} |`,
+    )
+    .join("\n");
+  const visualRationaleRows = workflow.generated_campaign_assets
+    .map(
+      (asset) =>
+        `| Day ${asset.day} | ${asset.platform} | ${escapePipes(asset.visual_source_anchor ?? "-")} | ${escapePipes(asset.visual_style_notes ?? "-")} | ${escapePipes(asset.negative_prompt ?? "-")} |`,
+    )
+    .join("\n");
 
   const deploymentRows = workflow.campaign_execution_drafts
     .slice()
@@ -232,6 +251,22 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     `| Visual posture | ${visualIdentity?.visual_tone ?? "Pending enrichment"} |`,
     `| Spatial grammar | ${visualIdentity?.design_patterns.join("; ") ?? "-"} |`,
     `| Typography posture | ${visualIdentity?.typography_vibes.join("; ") ?? "-"} |`,
+    "",
+    "## Lyra Proof Anchors Used",
+    "",
+    warmAnchors,
+    "",
+    "## Content Diversity Map",
+    "",
+    "| Day | Channel | Content angle | Source anchor | Buyer objection | Channel strategy | CTA style |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    diversityRows || "| - | - | - | - | - | - | - |",
+    "",
+    "## Visual Prompt Rationale",
+    "",
+    "| Day | Platform | Visual source anchor | Style notes | Negative prompt guardrail |",
+    "| --- | --- | --- | --- | --- |",
+    visualRationaleRows || "| - | - | - | - | - |",
     "",
     "---",
     "",

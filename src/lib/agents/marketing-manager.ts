@@ -10,6 +10,7 @@ import type {
   VisualIdentity,
   WorkflowState,
 } from "@/lib/types/orbit";
+import { LYRA_WARM_INTELLIGENCE } from "@/lib/data/lyra-brand-intelligence";
 import { countEmojis, hasForbiddenPhrase } from "@/lib/agents/prompts";
 import {
   buildChannelSopPrompt,
@@ -96,20 +97,25 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
     );
     const qaDraft = qaSelfCorrectDraft(draft, input, logs);
     const reviewedDraft = reviewAndRegenerateDraft(qaDraft, input, logs);
+    const enhanced = applyDraftDiversityAndVisualMetadata(
+      [attachStrategicIntent(reviewedDraft, carouselIntent)],
+      input,
+      logs,
+    );
     logs.push("[Scott · QA skill]: Brand filter complete.");
     return {
-      drafts: [attachStrategicIntent(reviewedDraft, carouselIntent)],
+      drafts: enhanced.drafts,
       logs,
       selected_skills,
-      governance_entries,
+      governance_entries: [...governance_entries, ...enhanced.governance],
     };
   }
 
   const schedule: Array<{ day: number; channel: "instagram" | "linkedin" | "email" }> = [
     { day: 1, channel: "instagram" },
-    { day: 2, channel: "linkedin" },
-    { day: 3, channel: "email" },
-    { day: 4, channel: "linkedin" },
+    { day: 2, channel: "email" },
+    { day: 3, channel: "linkedin" },
+    { day: 4, channel: "email" },
     { day: 5, channel: "instagram" },
     { day: 6, channel: "email" },
     { day: 7, channel: "linkedin" },
@@ -189,9 +195,19 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
       buildStrategicIntent(draft.meta.day, draft.meta.channel, goalKind, input.business_goal, input.success_metric);
     return attachStrategicIntent(reviewed, intent);
   });
+  const enhancedDrafts = applyDraftDiversityAndVisualMetadata(
+    reviewedDrafts,
+    input,
+    logs,
+  );
   logs.push("[Scott · QA skill]: Brand filter complete.");
 
-  return { drafts: reviewedDrafts, logs, selected_skills, governance_entries };
+  return {
+    drafts: enhancedDrafts.drafts,
+    logs,
+    selected_skills,
+    governance_entries: [...governance_entries, ...enhancedDrafts.governance],
+  };
 }
 
 function attachStrategicIntent(draft: CampaignExecutionDraft, intent: string): CampaignExecutionDraft {
@@ -267,6 +283,294 @@ function buildStrategicIntent(
     default:
       return `Supports "${m}" through disciplined rhythm on ${channel} (Day ${day}) mapped to modular studio artifacts.`;
   }
+}
+
+interface DiversityPlan {
+  day: number;
+  content_angle: string;
+  source_anchor: string;
+  buyer_objection: string;
+  channel_strategy: string;
+  cta_style: string;
+  cta_text: string;
+  hook?: string;
+  visual_concept?: string;
+  story_frame_sequence?: string[];
+}
+
+function isLyraInput(input: ManagerInput): boolean {
+  return (
+    input.companyName.toLowerCase().includes("lyra") ||
+    input.context.mission_statement.toLowerCase().includes("lyra")
+  );
+}
+
+function lyraDiversityPlan(): DiversityPlan[] {
+  return [
+    {
+      day: 1,
+      content_angle: "Talent density -> Lyra100, hiring bar, Fellowship",
+      source_anchor: "Lyra100 hiring campaign",
+      buyer_objection: "Can Lyra actually field elite engineers fast enough?",
+      channel_strategy: "Instagram behind-the-scenes proof-led hook",
+      cta_style: "Builder curiosity",
+      cta_text: "See how Lyra builds high-density teams",
+      hook: "What a builder-native AI company looks like after hours",
+      visual_concept: "After-hours engineering floor with dense collaboration",
+      story_frame_sequence: [
+        "Hook: after-hours engineering table",
+        "Proof: talent density and hiring standards",
+        "CTA: founder/operator strategy call",
+      ],
+    },
+    {
+      day: 2,
+      content_angle: "Insight/problem sequence opener",
+      source_anchor: "Rigorous take-home hiring process",
+      buyer_objection: "Is this just another agency pitch?",
+      channel_strategy: "Email 1 insight/problem",
+      cta_style: "Low-friction reply CTA",
+      cta_text: "Reply if this execution bottleneck sounds familiar",
+    },
+    {
+      day: 3,
+      content_angle: "Client proof -> ReadMe, Prophecy Gov, Hobbes, Thunder Compute",
+      source_anchor: "Prophecy Gov, Hobbes, Thunder Compute project proof",
+      buyer_objection: "Can they ship outside marketing language and deliver real systems?",
+      channel_strategy: "LinkedIn founder/operator proof post",
+      cta_style: "Evidence-led strategy CTA",
+      cta_text: "Book a founder/operator strategy call",
+    },
+    {
+      day: 4,
+      content_angle: "Frontier AI proximity -> Anthropic x Lyra",
+      source_anchor: "Anthropic x Lyra board game night",
+      buyer_objection: "Are they close to frontier AI ecosystems or just trend-following?",
+      channel_strategy: "Email 2 proof/case evidence",
+      cta_style: "Partnership credibility CTA",
+      cta_text: "Ask for the Anthropic-to-delivery playbook",
+    },
+    {
+      day: 5,
+      content_angle: "Community gravity -> Lyrathon, Iftar, student societies",
+      source_anchor: "Lyrathon community proof",
+      buyer_objection: "Does culture content connect to execution, or is it just branding?",
+      channel_strategy: "Instagram community/event proof",
+      cta_style: "Community-to-execution CTA",
+      cta_text: "See how community drives shipping velocity",
+      hook: "From Fellowship demand to shipped startup work",
+      visual_concept: "Hackathon/community energy with technical artifacts",
+      story_frame_sequence: [
+        "Hook: Lyrathon community turnout",
+        "Proof: Fellowship and student pipeline",
+        "CTA: strategy session for execution systems",
+      ],
+    },
+    {
+      day: 6,
+      content_angle: "Multi-city scale -> Sydney + Melbourne expansion",
+      source_anchor: "Melbourne expansion",
+      buyer_objection: "Can they scale delivery quality across multiple locations?",
+      channel_strategy: "Email 3 conversion/strategy call",
+      cta_style: "Direct conversion CTA",
+      cta_text: "Schedule a founder/operator strategy call this week",
+    },
+    {
+      day: 7,
+      content_angle: "Culture as execution proof + founder trust",
+      source_anchor: "Not a traditional SaaS startup or generic agency",
+      buyer_objection: "Will they understand founder urgency and operator constraints?",
+      channel_strategy: "LinkedIn close with founder/operator trust narrative",
+      cta_style: "Decisive founder CTA",
+      cta_text: "Start with a build audit",
+    },
+  ];
+}
+
+function buildDetailedImagePrompt(input: ManagerInput, plan: DiversityPlan, channel: string): string {
+  const motifs = LYRA_WARM_INTELLIGENCE.visual_motifs.join("; ");
+  const avoid = LYRA_WARM_INTELLIGENCE.avoid_list.join(", ");
+  return `A high-energy editorial visual for ${input.companyName} focused on "${plan.content_angle}". Subject: ${
+    plan.visual_concept ?? "builder-native engineering collaboration"
+  }. Setting: Sydney or Melbourne startup office with real shipping cues (whiteboards, architecture notes, laptops, code reviews). Composition: medium-wide with layered foreground-to-background depth and a visible execution focal point. Camera/framing: documentary style with natural perspective and no staged corporate poses. Lighting: warm practical office lighting with high-contrast accent highlights. Color palette: ${input.brandKit.primary_hex}, ${input.brandKit.secondary_hex}, ${input.brandKit.accent_hex}. Typography direction: clean, minimal overlays that leave room for headline/CTA. Brand mood: strategic, technical, founder-first, builder-native. Lyra source anchor: ${plan.source_anchor}. Channel context: ${channel}. Optional motif cues: ${motifs}. Avoid: ${avoid}.`;
+}
+
+function applyDraftDiversityAndVisualMetadata(
+  drafts: CampaignExecutionDraft[],
+  input: ManagerInput,
+  logs: string[],
+): { drafts: CampaignExecutionDraft[]; governance: GovernanceAuditEntry[] } {
+  if (drafts.length === 0) return { drafts, governance: [] };
+
+  const governance: GovernanceAuditEntry[] = [];
+  const lyraMode = isLyraInput(input);
+  const plan = lyraMode ? lyraDiversityPlan() : [];
+
+  const enhanced = drafts.map((draft, index) => {
+    const draftPlan =
+      plan.find((item) => item.day === draft.meta.day) ??
+      ({
+        day: draft.meta.day,
+        content_angle: `Channel-specific conversion angle for day ${draft.meta.day}`,
+        source_anchor: `Workflow proof anchor ${draft.meta.day}`,
+        buyer_objection: "Will this improve operator outcomes materially?",
+        channel_strategy: `${draft.meta.channel} conversion sequencing`,
+        cta_style: "Outcome-led",
+        cta_text: input.context.primary_cta,
+      } as DiversityPlan);
+
+    const previous = plan.find((item) => item.day === draft.meta.day - 1);
+    const sourceAnchor =
+      previous?.source_anchor === draftPlan.source_anchor ?
+        `${draftPlan.source_anchor} (alternate evidence cut)`
+      : draftPlan.source_anchor;
+
+    const imagePromptDetailed = buildDetailedImagePrompt(
+      input,
+      { ...draftPlan, source_anchor: sourceAnchor },
+      draft.meta.channel,
+    );
+    const negativePrompt = LYRA_WARM_INTELLIGENCE.avoid_list.join(", ");
+    const visualStyleNotes = `Use real execution motifs tied to ${sourceAnchor}; avoid generic AI startup stock imagery.`;
+
+    if (draft.type === "linkedin_post") {
+      const headlineByAngle = `${draftPlan.content_angle.split("->")[0].trim()}: ${input.companyName} proof`;
+      const body = [
+        `Most founder teams are not blocked by ideas. They are blocked by execution friction and weak proof chains.`,
+        `Lyra anchor: ${sourceAnchor}.`,
+        `Angle: ${draftPlan.content_angle}.`,
+        `Objection addressed: ${draftPlan.buyer_objection}.`,
+        `This is why Lyra is not a generic agency story. It is a builder-native execution system with concrete project outcomes.`,
+        `${draftPlan.cta_text}.`,
+      ].join("\n\n");
+      return {
+        ...draft,
+        headline: headlineByAngle,
+        body,
+        meta: {
+          ...draft.meta,
+          content_angle: draftPlan.content_angle,
+          source_anchor: sourceAnchor,
+          buyer_objection: draftPlan.buyer_objection,
+          channel_strategy: draftPlan.channel_strategy,
+          cta_style: draftPlan.cta_style,
+          cta_text: draftPlan.cta_text,
+          image_prompt_detailed: imagePromptDetailed,
+          negative_prompt: negativePrompt,
+          visual_source_anchor: sourceAnchor,
+          visual_style_notes: visualStyleNotes,
+        },
+      };
+    }
+
+    if (draft.type === "email") {
+      const emailStage =
+        draft.meta.day <= 2 ? "email 1: insight/problem"
+        : draft.meta.day <= 4 ? "email 2: proof/case evidence"
+        : "email 3: conversion/strategy call";
+      const subject =
+        emailStage === "email 1: insight/problem" ? "where founder teams lose execution speed"
+        : emailStage === "email 2: proof/case evidence" ? "proof from real lyra delivery work"
+        : "quick strategy call on your execution bottlenecks";
+      const body = [
+        `This is ${emailStage}.`,
+        `Problem/angle: ${draftPlan.content_angle}.`,
+        `Proof anchor: ${sourceAnchor}.`,
+        `Buyer objection we're resolving: ${draftPlan.buyer_objection}.`,
+        `Why this matters: Lyra's culture-to-execution model translates into faster shipping and clearer accountability.`,
+        `CTA: ${draftPlan.cta_text}.`,
+      ].join("\n\n");
+      return {
+        ...draft,
+        subject_line: subject,
+        preview_text: draftPlan.content_angle,
+        body_markdown: body,
+        call_to_action: draftPlan.cta_text,
+        meta: {
+          ...draft.meta,
+          content_angle: draftPlan.content_angle,
+          source_anchor: sourceAnchor,
+          buyer_objection: draftPlan.buyer_objection,
+          channel_strategy: `${draftPlan.channel_strategy} (${emailStage})`,
+          cta_style: draftPlan.cta_style,
+          cta_text: draftPlan.cta_text,
+          image_prompt_detailed: imagePromptDetailed,
+          negative_prompt: negativePrompt,
+          visual_source_anchor: sourceAnchor,
+          visual_style_notes: visualStyleNotes,
+        },
+      };
+    }
+
+    const slideNarrative =
+      draftPlan.story_frame_sequence ??
+      ["Hook", "Proof", "Execution signal", "CTA"];
+    const slides = draft.slides.map((slide, slideIdx) => {
+      const label = slideNarrative[slideIdx] ?? `Frame ${slideIdx + 1}`;
+      const detailed = `${imagePromptDetailed} Frame: ${label}.`;
+      return {
+        ...slide,
+        visual_direction: `${slide.visual_direction} | ${label}`,
+        visual_prompt: detailed,
+        design_artifact:
+          slide.design_artifact ?
+            {
+              ...slide.design_artifact,
+              visual_prompt: detailed,
+            }
+          : slide.design_artifact,
+      };
+    });
+    return {
+      ...draft,
+      caption: `${draftPlan.hook ?? "Builder-native execution"}\n\n${draftPlan.content_angle}\nSource: ${sourceAnchor}\nCTA: ${draftPlan.cta_text}`,
+      slides,
+      meta: {
+        ...draft.meta,
+        content_angle: draftPlan.content_angle,
+        source_anchor: sourceAnchor,
+        buyer_objection: draftPlan.buyer_objection,
+        channel_strategy: draftPlan.channel_strategy,
+        cta_style: draftPlan.cta_style,
+        cta_text: draftPlan.cta_text,
+        hook: draftPlan.hook,
+        visual_concept: draftPlan.visual_concept,
+        story_frame_sequence: slideNarrative,
+        image_prompt_detailed: imagePromptDetailed,
+        negative_prompt: negativePrompt,
+        visual_source_anchor: sourceAnchor,
+        visual_style_notes: visualStyleNotes,
+      },
+    };
+  });
+
+  if (lyraMode) {
+    logs.push(
+      "[Scott]: Applied Lyra content diversity map across all drafts (angle, proof anchor, objection, channel strategy, CTA style).",
+    );
+    governance.push(
+      createGovernanceEntry({
+        agent_id: "marketing_manager",
+        step_id: "campaign_draft_generated",
+        decision: "Selected non-repeating Lyra content angles and source anchors across the 7-day sequence.",
+        rationale:
+          "Prevented repetitive cross-channel messaging by rotating talent density, client proof, frontier proximity, community gravity, multi-city scale, and founder trust frames.",
+        resulting_asset: "campaign_execution_drafts",
+      }),
+    );
+    governance.push(
+      createGovernanceEntry({
+        agent_id: "visual_agent",
+        step_id: "visual_assets_generated",
+        decision: "Used detailed Lyra motif prompts instead of generic AI startup imagery.",
+        rationale:
+          "Visual prompts are anchored to dossier proof points (Fellowship, Lyrathon, Anthropic, Melbourne, client delivery) and include explicit avoid-lists.",
+        resulting_asset: "image_prompt_detailed",
+      }),
+    );
+  }
+
+  return { drafts: enhanced, governance };
 }
 
 export function buildStrategyDocuments(workflow: WorkflowState): StrategyDocument[] {

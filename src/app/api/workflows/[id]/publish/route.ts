@@ -108,8 +108,15 @@ export async function POST(request: Request, context: RouteParams) {
   }
 
   const incompatible = publishCompatibilityError(draft, platform);
+  let publishPlatform: PublishPlatform = platform;
   if (incompatible) {
-    return NextResponse.json({ error: incompatible }, { status: 400 });
+    if (!sandbox || draft.type === "email") {
+      return NextResponse.json({ error: incompatible }, { status: 400 });
+    }
+    publishPlatform =
+      draft.type === "carousel" && draft.platform === "linkedin" ?
+        "linkedin"
+      : "instagram";
   }
 
   const scheduleRaw = body.schedule_time?.trim();
@@ -144,15 +151,20 @@ export async function POST(request: Request, context: RouteParams) {
       sandbox && draft.meta.status !== "approved"
         ? "[Scott]: Sandbox deployment allowed without draft-level approve for demo reliability."
         : "[Scott]: Handshaking deployment bridge - scheduling your approved draft.",
-    metadata: { draft_id: draftId, publish_platform: platform },
+    metadata: {
+      draft_id: draftId,
+      publish_platform: publishPlatform,
+      requested_publish_platform: platform,
+      ...(incompatible && sandbox ? { sandbox_platform_override: true } : {}),
+    },
   });
 
   let result: SchedulePostResult;
   try {
     result =
       sandbox ?
-        createSandboxSchedulePostResult(platform, targetDate)
-      : await schedulePost(platform, content, imageUrl, targetDate, {
+        createSandboxSchedulePostResult(publishPlatform, targetDate)
+      : await schedulePost(publishPlatform, content, imageUrl, targetDate, {
           explicitSchedule,
         });
   } catch (error) {
@@ -178,7 +190,7 @@ export async function POST(request: Request, context: RouteParams) {
       status: nextStatus,
       is_published: nextPublished,
       scheduled_at: scheduledIso,
-      publish_platform: platform,
+      publish_platform: publishPlatform,
       deployment_post_id: deploymentPostId,
     },
   }));
@@ -190,7 +202,7 @@ export async function POST(request: Request, context: RouteParams) {
   workflowStore.addLog(params.id, {
     role: "orchestrator",
     step_id: "social_deployed",
-    message: `[Scott]: Successfully deployed to ${platform}. Post ID: ${deploymentPostId ?? "unknown"}.`,
+    message: `[Scott]: Successfully deployed to ${publishPlatform}. Post ID: ${deploymentPostId ?? "unknown"}.`,
     metadata: {
       draft_id: draftId,
       deployment_post_id: deploymentPostId,
@@ -208,7 +220,8 @@ export async function POST(request: Request, context: RouteParams) {
     draft_id: draftId,
     status: nextStatus,
     scheduled_at: scheduledIso,
-    publish_platform: platform,
+    publish_platform: publishPlatform,
+    requested_publish_platform: platform,
     deployment_post_id: deploymentPostId ?? null,
     sandbox,
     ...(sandbox ?
