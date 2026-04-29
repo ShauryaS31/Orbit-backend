@@ -41,13 +41,11 @@ Relevance AI should win this cycle by showing that category expertise can transl
 ## Founder / Brand Learning Notes
 
 - Tone should be bold, technical, and operator-focused
-- Emphasize autonomous AI workforce outcomes over generic productivity claims
 - Avoid vague AI hype; make every claim concrete
 
 ### How notes changed the campaign
 
 - Orbit translated this note into message constraints and review criteria: Tone should be bold, technical, and operator-focused
-- Orbit translated this note into message constraints and review criteria: Emphasize autonomous AI workforce outcomes over generic productivity claims
 - Orbit translated this note into message constraints and review criteria: Avoid vague AI hype; make every claim concrete
 
 ### Governance-linked adjustments
