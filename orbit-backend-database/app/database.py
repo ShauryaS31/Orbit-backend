@@ -369,6 +369,7 @@ def create_work_order(request: WorkOrderCreateRequest) -> WorkOrder:
         department=request.department,
         managerAgentId=request.managerAgentId,
         objective=request.objective,
+        successMetric=request.successMetric,
         contextSections=request.contextSections,
         outputType=request.outputType,
         autonomy=request.autonomy,

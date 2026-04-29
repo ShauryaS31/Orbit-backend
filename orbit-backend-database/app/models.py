@@ -90,6 +90,7 @@ class WorkOrder(BaseModel):
     department: Department
     managerAgentId: str
     objective: str
+    successMetric: str | None = None
     contextSections: list[ContextSectionId]
     outputType: WorkOrderOutputType
     autonomy: WorkOrderAutonomy
@@ -107,6 +108,7 @@ class WorkOrderCreateRequest(BaseModel):
     department: Department
     managerAgentId: str
     objective: str
+    successMetric: str | None = None
     contextSections: list[ContextSectionId]
     outputType: WorkOrderOutputType
     autonomy: WorkOrderAutonomy = "approval_required"
