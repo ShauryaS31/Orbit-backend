@@ -130,6 +130,7 @@ INITIAL_COMPANY_CONTEXT = CompanyContextState(
 )
 
 
+# Demo seed row for fresh installs — frontend treats id wo-launch-001 as Sample; keep id stable if referenced.
 INITIAL_WORK_ORDERS = [
     WorkOrder(
         id="wo-launch-001",
@@ -154,7 +155,8 @@ INITIAL_WORK_ORDERS = [
 ]
 
 
-SYNC_PILOT_MANAGER_PLAN = ManagerPlanPreviewResponse(
+# Demo narrative aligned with seeded work order wo-launch-001 — not generic agent output for every WO.
+DEMO_SEED_LYRA_MANAGER_PLAN = ManagerPlanPreviewResponse(
     workOrderId="wo-launch-001",
     managerAgentId="scott",
     department="marketing",
@@ -179,7 +181,7 @@ SYNC_PILOT_MANAGER_PLAN = ManagerPlanPreviewResponse(
 )
 
 
-SYNC_PILOT_CAMPAIGN = SevenDayLaunchCampaignResponse(
+DEMO_SEED_LYRA_CAMPAIGN = SevenDayLaunchCampaignResponse(
     workOrderId="wo-launch-001",
     campaignName="Lyra Velocity Sprint",
     positioning="Lyra Technologies AU helps founding engineering teams remove process drag and ship product at startup speed.",

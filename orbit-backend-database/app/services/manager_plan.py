@@ -7,12 +7,12 @@ from app.models import (
     SevenDayLaunchCampaignResponse,
     WorkOrder,
 )
-from app.seed_data import SYNC_PILOT_CAMPAIGN, SYNC_PILOT_MANAGER_PLAN
+from app.seed_data import DEMO_SEED_LYRA_CAMPAIGN, DEMO_SEED_LYRA_MANAGER_PLAN
 
 
 def build_manager_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder | None) -> ManagerPlanPreviewResponse:
     if request.workOrderId == "wo-launch-001":
-        return SYNC_PILOT_MANAGER_PLAN
+        return DEMO_SEED_LYRA_MANAGER_PLAN
 
     manager_id = request.managerAgentId
     return ManagerPlanPreviewResponse(
@@ -82,8 +82,9 @@ def build_manager_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder
 
 
 def build_final_output(request: FinalOutputRequest, work_order: WorkOrder) -> SevenDayLaunchCampaignResponse | dict:
-    if work_order.id == "wo-launch-001" or request.outputType == "campaign_package":
-        return SYNC_PILOT_CAMPAIGN.model_copy(update={"workOrderId": work_order.id})
+    # Only the seeded demo work order gets the bundled Lyra-shaped fixture — never substitute real workflow outputs.
+    if work_order.id == "wo-launch-001":
+        return DEMO_SEED_LYRA_CAMPAIGN.model_copy(update={"workOrderId": work_order.id})
 
     return {
         "schemaVersion": "generic_work_order_output.v1",
