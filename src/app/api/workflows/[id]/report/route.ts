@@ -5,6 +5,7 @@ import {
   governancePersonaDisplayName,
   NOVAS_RESEARCH_REPORT_TITLE,
   type ManagerContentReview,
+  type ManagerCritique,
 } from "@/lib/types/orbit";
 
 interface RouteParams {
@@ -288,6 +289,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     visualRationaleRows || "| - | - | - | - | - |",
     "",
     buildManagerReviewGuardrailSection(workflow),
+    buildManagerCritiqueLoopSection(workflow),
     "---",
     "",
     "## 7-Day Campaign Calendar",
@@ -327,6 +329,72 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
 
 function escapePipes(value: string): string {
   return value.replace(/\|/g, "\\|");
+}
+
+function collectWorkflowCritiques(
+  workflow: NonNullable<ReturnType<typeof workflowStore.getWorkflow>>,
+): ManagerCritique[] {
+  if (workflow.manager_critiques?.length) return workflow.manager_critiques;
+  return workflow.campaign_execution_drafts
+    .map((d) => d.meta.manager_critique)
+    .filter((c): c is ManagerCritique => Boolean(c));
+}
+
+function buildManagerCritiqueLoopSection(
+  workflow: NonNullable<ReturnType<typeof workflowStore.getWorkflow>>,
+): string {
+  const critiques = collectWorkflowCritiques(workflow);
+  if (critiques.length === 0) {
+    return ["## Manager Critique Loop", "", "_No manager critiques on this workflow yet._", ""].join("\n");
+  }
+
+  const sorted = [...critiques].sort((a, b) => {
+    const da =
+      workflow.campaign_execution_drafts.find((d) => d.meta.id === a.draftId)?.meta.day ?? 99;
+    const db =
+      workflow.campaign_execution_drafts.find((d) => d.meta.id === b.draftId)?.meta.day ?? 99;
+    return da - db;
+  });
+
+  const stanceApprove = critiques.filter((c) => c.stance === "approve").length;
+  const stanceChallenge = critiques.filter((c) => c.stance === "challenge").length;
+  const stanceOppose = critiques.filter((c) => c.stance === "oppose").length;
+  const stanceBlock = critiques.filter((c) => c.stance === "block").length;
+
+  const sevNote = critiques.filter((c) => c.severity === "note").length;
+  const sevPush = critiques.filter((c) => c.severity === "pushback").length;
+  const sevBlock = critiques.filter((c) => c.severity === "blocker").length;
+
+  const rows = sorted
+    .map((c) => {
+      const draft = workflow.campaign_execution_drafts.find((d) => d.meta.id === c.draftId);
+      const day = draft ? String(draft.meta.day) : "-";
+      const channel = draft?.meta.channel ?? "-";
+      const crit =
+        c.critique.length > 220 ? `${escapePipes(c.critique.slice(0, 217))}…` : escapePipes(c.critique);
+      const action =
+        c.requestedAction ?
+          escapePipes(c.requestedAction.length > 140 ? `${c.requestedAction.slice(0, 137)}…` : c.requestedAction)
+        : "-";
+      const score = c.linkedReviewScore ?? "-";
+      return `| ${day} | ${escapePipes(channel)} | ${c.stance} | ${c.severity} | ${crit} | ${action} | ${score} |`;
+    })
+    .join("\n");
+
+  return [
+    "## Manager Critique Loop",
+    "",
+    "_Phase 7B — Scott’s line-by-line stance on Nova’s drafts (single bounded rewrite unchanged; critiques are explanatory)._",
+    "",
+    `- **Total critiques:** ${critiques.length}`,
+    `- **Stance — approve / challenge / oppose / block:** ${stanceApprove} / ${stanceChallenge} / ${stanceOppose} / ${stanceBlock}`,
+    `- **Severity — note / pushback / blocker:** ${sevNote} / ${sevPush} / ${sevBlock}`,
+    "",
+    "| Day | Channel | Stance | Severity | Critique | Requested action | Linked score |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
+    rows,
+    "",
+  ].join("\n");
 }
 
 function buildManagerReviewGuardrailSection(

@@ -9,6 +9,7 @@ import type {
   GovernanceAuditEntry,
   LyraWarmIntelligence,
   ManagerContentReview,
+  ManagerCritique,
   ManagerWorkflowStep,
   ProductMarketingContext,
   VisualIdentity,
@@ -65,6 +66,8 @@ export interface ManagerOutput {
   governance_entries?: GovernanceAuditEntry[];
   /** Phase 3 — deterministic Scott QA summaries (mirrored on each draft.meta.manager_review). */
   manager_content_reviews?: ManagerContentReview[];
+  /** Phase 7B — Scott critiques aligned to reviews (mirrored on draft.meta.manager_critique). */
+  manager_critiques?: ManagerCritique[];
 }
 
 export interface StrategyDocument {
@@ -80,6 +83,8 @@ function mergeManagerReviewPass(
   drafts: CampaignExecutionDraft[];
   governance_entries: GovernanceAuditEntry[];
   manager_content_reviews: ManagerContentReview[];
+  manager_critiques: ManagerCritique[];
+  critique_logs: string[];
 } {
   const out = applyManagerContentReviews(drafts, {
     companyName: input.companyName,
@@ -93,6 +98,8 @@ function mergeManagerReviewPass(
     drafts: out.drafts,
     governance_entries: [...governanceSoFar, ...out.governance_entries],
     manager_content_reviews: out.manager_content_reviews,
+    manager_critiques: out.manager_critiques,
+    critique_logs: out.critique_logs,
   };
 }
 
@@ -147,6 +154,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
     );
     logs.push("[Scott · QA skill]: Brand filter complete.");
     const reviewed = mergeManagerReviewPass(input, enhanced.drafts, [...governance_entries, ...enhanced.governance]);
+    for (const line of reviewed.critique_logs) logs.push(line);
     return {
       drafts: reviewed.drafts,
       logs,
@@ -154,6 +162,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
       workflow_steps,
       governance_entries: reviewed.governance_entries,
       manager_content_reviews: reviewed.manager_content_reviews,
+      manager_critiques: reviewed.manager_critiques,
     };
   }
 
@@ -249,6 +258,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
   logs.push("[Scott · QA skill]: Brand filter complete.");
 
   const reviewed = mergeManagerReviewPass(input, enhancedDrafts.drafts, [...governance_entries, ...enhancedDrafts.governance]);
+  for (const line of reviewed.critique_logs) logs.push(line);
   return {
     drafts: reviewed.drafts,
     logs,
@@ -256,6 +266,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
     workflow_steps,
     governance_entries: reviewed.governance_entries,
     manager_content_reviews: reviewed.manager_content_reviews,
+    manager_critiques: reviewed.manager_critiques,
   };
 }
 

@@ -210,6 +210,7 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     selected_skills: managerOutput.selected_skills,
     manager_workflow_steps: managerOutput.workflow_steps,
     manager_content_reviews: managerOutput.manager_content_reviews,
+    manager_critiques: managerOutput.manager_critiques,
   });
 
   workflowStore.addLog(workflowId, {

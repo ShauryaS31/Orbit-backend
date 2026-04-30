@@ -128,6 +128,37 @@ export interface ManagerContentReview {
   reviewedAt: string;
 }
 
+/** Phase 7B — visible manager-worker critique aligned to `manager_review` (no extra regeneration loops). */
+export type ManagerCritiqueSeverity = "note" | "pushback" | "blocker";
+
+export type ManagerCritiqueReasonCode =
+  | "too_close_to_reference"
+  | "missing_synthesis"
+  | "generic_channel_fit"
+  | "incomplete_asset"
+  | "weak_cta"
+  | "unsupported_claim"
+  | "repetitive"
+  | "visual_too_generic"
+  | "needs_more_research";
+
+export interface ManagerCritique {
+  id: string;
+  draftId?: string;
+  targetAgentId: string;
+  targetAgentDisplayName?: string;
+  managerAgentId: "scott";
+  managerDisplayName: "Scott";
+  severity: ManagerCritiqueSeverity;
+  stance: "approve" | "challenge" | "oppose" | "block";
+  critique: string;
+  requestedAction?: string;
+  reasonCodes: ManagerCritiqueReasonCode[];
+  linkedReviewScore?: number;
+  linkedReviewDecision?: "approve" | "revise";
+  createdAt: string;
+}
+
 /** Audit trail entry for goal-driven orchestration and governance exports. */
 export interface GovernanceAuditEntry {
   agent_id: string;
@@ -187,6 +218,9 @@ export interface DraftMetadata {
   deployment_post_id?: string;
   /** Manager content QA — does not replace human approve/regenerate APIs. */
   manager_review?: ManagerContentReview;
+
+  /** Phase 7B — Scott critique narrative aligned to `manager_review`. */
+  manager_critique?: ManagerCritique;
 
   /** Phase 7 — factual extraction from evidence (not pasted prose). */
   extracted_fact?: string;
@@ -470,5 +504,7 @@ export interface WorkflowState {
   activity_logs: ActivityLog[];
   /** Final manager review payload per draft (mirrors draft.meta.manager_review for audit exports). */
   manager_content_reviews?: ManagerContentReview[];
+  /** Phase 7B — aggregated Scott critiques (same order as reviews / drafts after QA). */
+  manager_critiques?: ManagerCritique[];
   error_message?: string;
 }
