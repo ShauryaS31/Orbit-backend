@@ -5,6 +5,8 @@ import type {
   LyraWarmIntelligence,
   ManagerContentIssue,
   ManagerContentReview,
+  ManagerCritique,
+  ManagerCritiqueReasonCode,
   ProductMarketingContext,
 } from "@/lib/types/orbit";
 import { createGovernanceEntry } from "@/lib/services/governance-logger";
@@ -122,6 +124,186 @@ export function buildRevisionInstruction(
   }
 
   return `Revise this draft to ${issueSentence}`;
+}
+
+function mapIssuesToReasonCodes(issues: ManagerContentIssue[]): ManagerCritiqueReasonCode[] {
+  const out = new Set<ManagerCritiqueReasonCode>();
+  for (const issue of issues) {
+    switch (issue.type) {
+      case "too_close_to_reference":
+        out.add("too_close_to_reference");
+        break;
+      case "generic_copy":
+        out.add("generic_channel_fit");
+        break;
+      case "unsupported_claim":
+        out.add("unsupported_claim");
+        out.add("needs_more_research");
+        break;
+      case "wrong_channel_voice":
+        out.add("generic_channel_fit");
+        break;
+      case "weak_cta":
+        out.add("weak_cta");
+        break;
+      case "repetitive":
+        out.add("repetitive");
+        break;
+      case "reference_summary_not_synthesis":
+        out.add("missing_synthesis");
+        break;
+      case "incomplete_email_draft":
+        out.add("incomplete_asset");
+        break;
+      case "weak_channel_format":
+        out.add("visual_too_generic");
+        break;
+      default:
+        break;
+    }
+  }
+  return [...out];
+}
+
+function channelLabel(draft: CampaignExecutionDraft): string {
+  if (draft.meta.channel === "linkedin") return "LinkedIn";
+  if (draft.meta.channel === "email") return "email";
+  return "Instagram";
+}
+
+function summarizeIssueSnippets(issues: ManagerContentIssue[], max = 3): string {
+  return issues
+    .slice(0, max)
+    .map((i) => i.note.split(".")[0]?.trim() ?? i.type)
+    .join("; ");
+}
+
+/** Builds Phase 7B critique aligned to final `manager_review` — grounded in scored issues only. */
+export function buildManagerCritiqueFromReview(
+  review: ManagerContentReview,
+  draft: CampaignExecutionDraft,
+  ctx: ManagerReviewDraftContext,
+): ManagerCritique {
+  const reasonCodes = mapIssuesToReasonCodes(review.issues);
+  const anchorShort =
+    draft.meta.source_anchor?.trim().slice(0, 80) ??
+    draft.meta.visual_source_anchor?.trim().slice(0, 80) ??
+    "the proof anchor";
+  const ch = channelLabel(draft);
+  const goalHint =
+    ctx.businessGoal?.trim() ||
+    ctx.successMetric?.trim() ||
+    ctx.context.primary_cta ||
+    "stated campaign outcomes";
+
+  const hasHigh = review.issues.some((i) => i.severity === "high");
+  const highCount = review.issues.filter((i) => i.severity === "high").length;
+  const revisionAsk =
+    review.decision === "revise" ?
+      review.revisionInstruction?.trim() || buildRevisionInstruction(review)
+    : undefined;
+
+  const base = {
+    id: crypto.randomUUID(),
+    draftId: review.draftId,
+    targetAgentId: review.reviewedAgentId,
+    targetAgentDisplayName: review.reviewedDisplayName,
+    managerAgentId: "scott" as const,
+    managerDisplayName: "Scott" as const,
+    reasonCodes,
+    linkedReviewScore: review.score,
+    linkedReviewDecision: review.decision,
+    createdAt: new Date().toISOString(),
+  };
+
+  if (review.decision === "approve" && review.score >= 85) {
+    return {
+      ...base,
+      severity: "note",
+      stance: "approve",
+      critique: `Approved — ${ch} supports ${goalHint} and keeps "${anchorShort}" as evidence, not dossier recap. Good synthesis versus guardrails.`,
+    };
+  }
+
+  if (review.decision === "approve") {
+    const lead = review.issues[0];
+    const caveat = lead ?
+      `${lead.type.replace(/_/g, " ")} — ${lead.note.split(".")[0] ?? lead.note}.`
+    : "Minor QA notes remain.";
+    return {
+      ...base,
+      severity: "note",
+      stance: "challenge",
+      critique: `Approved with caveat — ${caveat} Give it one tightening pass before scheduling.`,
+      requestedAction:
+        lead ?
+          ISSUE_TYPE_REVISION_HINT[lead.type] ?
+            `${ISSUE_TYPE_REVISION_HINT[lead.type]}.`
+          : `${lead.note}`
+        : undefined,
+    };
+  }
+
+  if (!hasHigh) {
+    return {
+      ...base,
+      severity: "pushback",
+      stance: "challenge",
+      critique: `Nova — this ${ch} draft needs rework: ${summarizeIssueSnippets(review.issues)}. Turn references into founder insight — "${anchorShort}" should cite once, then argue.`,
+      requestedAction: revisionAsk,
+    };
+  }
+
+  const stance: "oppose" | "block" =
+    review.score < 68 || highCount >= 2 ? "block" : "oppose";
+  const highNotes = review.issues.filter((i) => i.severity === "high");
+  const highSummary = summarizeIssueSnippets(highNotes, 4);
+
+  return {
+    ...base,
+    severity: "blocker",
+    stance,
+    critique:
+      stance === "block" ?
+        `Blocking this ${ch} draft — ${highSummary}. Not ready against ${goalHint}; reads too thin or too close to source scaffolding.`
+      : `Strong opposition on this ${ch} draft — ${highSummary}. Rewrite before we ship anything downstream.`,
+    requestedAction: revisionAsk,
+  };
+}
+
+function buildCritiqueActivityLogs(critiques: ManagerCritique[], drafts: CampaignExecutionDraft[]): string[] {
+  const draftById = new Map(drafts.map((d) => [d.meta.id, d]));
+  const logs: string[] = [];
+  let cleanApprove = 0;
+  let mildApprove = 0;
+
+  for (const c of critiques) {
+    const draft = c.draftId ? draftById.get(c.draftId) : undefined;
+    const day = draft?.meta.day ?? "?";
+    const ch = draft ? channelLabel(draft) : "channel";
+    const short = c.critique.length > 140 ? `${c.critique.slice(0, 137)}…` : c.critique;
+
+    if (c.severity === "blocker") {
+      logs.push(`[Scott]: Blocking Nova's ${ch} draft (Day ${day}) — ${short}`);
+    } else if (c.severity === "pushback") {
+      logs.push(`[Scott]: Challenging Nova's ${ch} draft (Day ${day}) — ${short}`);
+    } else if (c.stance === "approve") {
+      cleanApprove += 1;
+    } else if (c.stance === "challenge") {
+      mildApprove += 1;
+    }
+  }
+
+  if (cleanApprove > 0) {
+    logs.push(
+      `[Scott]: Approved ${cleanApprove} draft(s) — anchors land as evidence with usable synthesis.`,
+    );
+  }
+  if (mildApprove > 0) {
+    logs.push(`[Scott]: Approved ${mildApprove} draft(s) with minor caveats — polish before publish.`);
+  }
+
+  return logs;
 }
 
 function normalizeWhitespace(s: string): string {
@@ -595,7 +777,7 @@ function rewriteDeterministic(
     const subject =
       draft.subject_line.includes(String(draft.meta.day)) ?
         draft.subject_line
-      : `${draft.subject_line} · ${draft.meta.day}`;
+      : `${draft.subject_line} - ${draft.meta.day}`;
     const detail = draft.meta.email_detail;
     const mergedDetail =
       detail ?
@@ -642,7 +824,7 @@ function rewriteDeterministic(
     };
   });
   const caption = stripGenericPhrases(
-    `${carousel.caption}\n\nCTA: ${primaryCta}\nEvidence anchor: ${anchor} (cite, don't paste reference paragraphs).`,
+    `${carousel.caption}\n\n${primaryCta}`,
   );
   return {
     draft: {
@@ -652,6 +834,10 @@ function rewriteDeterministic(
       card_config: {
         ...carousel.card_config,
         headline: slides[0]?.headline ?? carousel.card_config.headline,
+      },
+      meta: {
+        ...carousel.meta,
+        reviewer_note: `Internal QA note: keep "${anchor}" as evidence-only grounding; do not paste reference paragraphs.`,
       },
     },
     instruction,
@@ -668,16 +854,38 @@ function attachReviewMeta(draft: CampaignExecutionDraft, review: ManagerContentR
   };
 }
 
+function summarizeTopReasonCodes(critiques: ManagerCritique[], limit = 6): string {
+  const tally = new Map<string, number>();
+  for (const c of critiques) {
+    for (const code of c.reasonCodes) {
+      tally.set(code, (tally.get(code) ?? 0) + 1);
+    }
+  }
+  return [...tally.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([k, v]) => `${k}×${v}`)
+    .join(", ") || "none";
+}
+
 export function applyManagerContentReviews(
   drafts: CampaignExecutionDraft[],
   ctx: ManagerReviewDraftContext,
 ): {
   drafts: CampaignExecutionDraft[];
   manager_content_reviews: ManagerContentReview[];
+  manager_critiques: ManagerCritique[];
+  critique_logs: string[];
   governance_entries: GovernanceAuditEntry[];
 } {
   if (drafts.length === 0) {
-    return { drafts, manager_content_reviews: [], governance_entries: [] };
+    return {
+      drafts,
+      manager_content_reviews: [],
+      manager_critiques: [],
+      critique_logs: [],
+      governance_entries: [],
+    };
   }
 
   let working = drafts.map((d) => ({ ...d })) as CampaignExecutionDraft[];
@@ -712,6 +920,19 @@ export function applyManagerContentReviews(
       working[i] = attachReviewMeta(draft, review);
     }
   }
+
+  const critiques = finals.map((r, idx) => buildManagerCritiqueFromReview(r, working[idx]!, ctx));
+  for (let i = 0; i < working.length; i += 1) {
+    working[i] = {
+      ...working[i]!,
+      meta: {
+        ...working[i]!.meta,
+        manager_critique: critiques[i],
+      },
+    };
+  }
+
+  const critique_logs = buildCritiqueActivityLogs(critiques, working);
 
   const governance_entries: GovernanceAuditEntry[] = [];
   const approved = finals.filter((r) => r.decision === "approve").length;
@@ -748,9 +969,37 @@ export function applyManagerContentReviews(
     );
   }
 
+  const blockerCritiques = critiques.filter((c) => c.severity === "blocker");
+  const pushbackCritiques = critiques.filter((c) => c.severity === "pushback");
+  governance_entries.push(
+    createGovernanceEntry({
+      agent_id: "marketing_manager",
+      display_agent_name: "Scott",
+      step_id: "campaign_draft_generated",
+      decision: `Manager critique loop — ${critiques.length} critiques (${pushbackCritiques.length} pushbacks, ${blockerCritiques.length} blockers).`,
+      rationale: `Top reason codes: ${summarizeTopReasonCodes(critiques)}. One bounded rewrite already applied where revise fired; critiques expose Scott ↔ Nova disagreement for judges.`,
+      resulting_asset: "manager_critiques",
+    }),
+  );
+
+  for (const c of blockerCritiques.slice(0, 5)) {
+    governance_entries.push(
+      createGovernanceEntry({
+        agent_id: "marketing_manager",
+        display_agent_name: "Scott",
+        step_id: "campaign_draft_generated",
+        decision: `Scott critique blocker on draft ${c.draftId ?? "unknown"}`,
+        rationale: c.requestedAction ? `${c.critique.slice(0, 200)} Action: ${c.requestedAction.slice(0, 160)}` : c.critique.slice(0, 280),
+        resulting_asset: "manager_critique",
+      }),
+    );
+  }
+
   return {
     drafts: working,
     manager_content_reviews: finals,
+    manager_critiques: critiques,
+    critique_logs,
     governance_entries,
   };
 }
