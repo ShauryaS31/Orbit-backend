@@ -2,6 +2,7 @@ export type WorkflowStatus =
   | "pending"
   | "needs_validation"
   | "running"
+  | "needs_review"
   | "completed"
   | "failed";
 

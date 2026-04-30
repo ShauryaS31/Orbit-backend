@@ -1392,9 +1392,9 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
     metadata: {
       ui_event: {
         agent_id: "scott",
-        state: hasUnapprovedOutput ? "error" : "complete",
+        state: hasUnapprovedOutput ? "waiting_approval" : "complete",
         location_hint: "managerHome",
-        message: hasUnapprovedOutput ? "Needs review" : "Complete",
+        message: hasUnapprovedOutput ? "Review" : "Complete",
       },
     },
   });
@@ -1410,9 +1410,11 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
   });
 
   workflowStore.updateWorkflow(workflowId, {
-    status: hasUnapprovedOutput ? "failed" : "completed",
+    status: hasUnapprovedOutput ? "needs_review" : "completed",
     manager_summary_report: managerSummaryReport,
-    ...(hasUnapprovedOutput ? { error_message: "Manager review did not approve all outputs within the revision limit." } : {}),
+    ...(hasUnapprovedOutput ?
+      { error_message: "Manager review did not approve all outputs within the revision limit." }
+    : { error_message: undefined }),
   });
 }
 

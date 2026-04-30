@@ -17,7 +17,7 @@ export async function POST(_request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
   }
 
-  if (workflow.status === "completed") {
+  if (workflow.status === "completed" || workflow.status === "needs_review") {
     return NextResponse.json({ workflow_id: id, status: workflow.status });
   }
 
