@@ -91,7 +91,22 @@ export type ManagerContentIssueType =
   | "unsupported_claim"
   | "wrong_channel_voice"
   | "weak_cta"
-  | "repetitive";
+  | "repetitive"
+  | "reference_summary_not_synthesis"
+  | "incomplete_email_draft"
+  | "weak_channel_format";
+
+/** How tightly draft copy may mirror dossier language (Phase 7 — evidence-led synthesis). */
+export type ReferenceUsagePolicy = "evidence_only" | "direct_quote_approved" | "unknown";
+
+/** Structured outbound email fields stored under draft meta for QA and exports. */
+export interface DraftEmailStructuredParts {
+  greeting: string;
+  body: string;
+  proof_point: string;
+  signoff: string;
+  full_email: string;
+}
 
 export interface ManagerContentIssue {
   type: ManagerContentIssueType;
@@ -160,7 +175,7 @@ export interface DraftMetadata {
   story_frame_sequence?: string[];
   /** Optional explicit CTA copy used in post caption/body. */
   cta_text?: string;
-  /** True when draft was produced by Carousel Maker (10-slide Duncan Rogoff / Canva-Killer expert pass). */
+  /** True when draft was produced by Carousel Maker (10-slide brand-led editorial expert pass). */
   carousel_expert_mode?: boolean;
   reviewer_note?: string;
   /** True once content has gone live via orchestrator (immediate publish path). */
@@ -172,6 +187,21 @@ export interface DraftMetadata {
   deployment_post_id?: string;
   /** Manager content QA — does not replace human approve/regenerate APIs. */
   manager_review?: ManagerContentReview;
+
+  /** Phase 7 — factual extraction from evidence (not pasted prose). */
+  extracted_fact?: string;
+  /** Phase 7 — inferred thesis operators argue. */
+  strategic_insight?: string;
+  /** Phase 7 — creative stance / headline thesis (distinct from diversity `content_angle` labels). */
+  campaign_angle?: string;
+  /** Phase 7 — structural intent (`linkedin_*`, email sequence label, carousel arc). */
+  channel_format?: string;
+  /** Phase 7 — guardrail notes on originality / synthesis expectations. */
+  originality_notes?: string;
+  reference_usage_policy?: ReferenceUsagePolicy;
+
+  /** Phase 7 — usable outbound email decomposition + assembled message. */
+  email_detail?: DraftEmailStructuredParts;
 }
 
 export interface WebsiteIntelligence {
@@ -322,12 +352,13 @@ export interface CampaignEmailDraft {
 }
 
 export interface CarouselLayoutConfig {
-  theme: "canva-killer-dark";
-  accent: "neon-red-blue";
-  text_effect: "glowing";
+  /** Editorial photo-real campaign default; legacy neon preset retained for decoded older payloads. */
+  theme: "editorial_photo_real" | "canva-killer-dark";
+  accent: "brand_palette_led" | "neon-red-blue";
+  text_effect: "clean_typography" | "glowing";
 }
 
-/** Design-first slide contract for GPT-image-1 and UI (Duncan Rogoff Canva-Killer system). */
+/** Design-first slide contract for GPT-image-2-class generators and UI overlays. */
 export interface DesignArtifact {
   headline: string;
   body: string;

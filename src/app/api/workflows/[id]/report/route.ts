@@ -92,6 +92,16 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
         `| Day ${draft.meta.day} | ${draft.meta.channel} | ${escapePipes(draft.meta.content_angle ?? "-")} | ${escapePipes(draft.meta.source_anchor ?? "-")} | ${escapePipes(draft.meta.buyer_objection ?? "-")} | ${escapePipes(draft.meta.channel_strategy ?? "-")} | ${escapePipes(draft.meta.cta_style ?? "-")} |`,
     )
     .join("\n");
+  const creativeIntelRows = workflow.campaign_execution_drafts
+    .slice()
+    .sort((a, b) => a.meta.day - b.meta.day)
+    .map((draft) => {
+      const m = draft.meta;
+      const notes = m.originality_notes ?? "-";
+      const notesTrim = notes.length > 240 ? `${notes.slice(0, 237)}…` : notes;
+      return `| Day ${draft.meta.day} | ${draft.meta.channel} | ${escapePipes(m.source_anchor ?? "-")} | ${escapePipes(m.extracted_fact ?? "-")} | ${escapePipes(m.strategic_insight ?? "-")} | ${escapePipes(m.campaign_angle ?? "-")} | ${escapePipes(m.channel_format ?? "-")} | ${escapePipes(notesTrim)} |`;
+    })
+    .join("\n");
   const visualRationaleRows = workflow.generated_campaign_assets
     .map(
       (asset) =>
@@ -262,6 +272,14 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "| Day | Channel | Content angle | Source anchor | Buyer objection | Channel strategy | CTA style |",
     "| --- | --- | --- | --- | --- | --- | --- |",
     diversityRows || "| - | - | - | - | - | - | - |",
+    "",
+    "## Creative Intelligence Upgrade",
+    "",
+    "_Phase 7 — reference material becomes evidence for an original thesis chain per draft._",
+    "",
+    "| Day | Channel | Source anchor | Extracted fact | Strategic insight | Campaign angle | Channel format | Originality notes |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    creativeIntelRows || "| - | - | - | - | - | - | - | - |",
     "",
     "## Visual Prompt Rationale",
     "",

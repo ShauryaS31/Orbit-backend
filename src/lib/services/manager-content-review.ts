@@ -75,6 +75,12 @@ const ISSUE_TYPE_REVISION_HINT: Partial<Record<ManagerContentIssue["type"], stri
   wrong_channel_voice: "tune hook and proof cues to this channel’s audience expectations",
   weak_cta: "strengthen the CTA with a decisive next step aligned to positioning",
   repetitive: "vary headline/anchor/CTA repetition across assets while preserving truth",
+  reference_summary_not_synthesis:
+    "rewrite as a founder/operator thesis — cite proof anchors once as evidence; no dossier scaffolding or blog recap rhythm",
+  incomplete_email_draft:
+    "assemble a send-ready email (subject + preview + greeting + multi-paragraph body + proof point + CTA + sign-off)",
+  weak_channel_format:
+    "assign explicit channel_format / visual_concept so packaging matches native LinkedIn or Instagram expectations",
 };
 
 /**
@@ -339,6 +345,117 @@ function flagWeakCta(draft: CampaignExecutionDraft): ManagerContentIssue[] {
   return issues;
 }
 
+function flagReferenceSummaryNotSynthesis(draft: CampaignExecutionDraft, copy: string): ManagerContentIssue[] {
+  const issues: ManagerContentIssue[] = [];
+  const lower = copy.toLowerCase();
+
+  if (!draft.meta.strategic_insight?.trim() || !draft.meta.campaign_angle?.trim()) {
+    issues.push({
+      type: "reference_summary_not_synthesis",
+      severity: "medium",
+      note: "Strategic synthesis metadata missing — attach insight + angle before treating draft as campaign-ready.",
+    });
+  }
+
+  if (
+    /\blyra anchor\b|\bangle:\s/i.test(lower) ||
+    /\bthis is email\b/i.test(lower) ||
+    /\bproblem\/angle\b/i.test(lower)
+  ) {
+    issues.push({
+      type: "reference_summary_not_synthesis",
+      severity: "high",
+      note: "Reads like dossier labels or recap scaffolding instead of operator-authored synthesis.",
+    });
+  }
+
+  const anchor = draft.meta.source_anchor?.trim();
+  if (anchor && anchor.length > 12) {
+    let hits = 0;
+    let idx = lower.indexOf(anchor.toLowerCase());
+    while (idx !== -1) {
+      hits += 1;
+      idx = lower.indexOf(anchor.toLowerCase(), idx + anchor.length);
+    }
+    if (hits >= 5) {
+      issues.push({
+        type: "reference_summary_not_synthesis",
+        severity: "medium",
+        note: "Source anchor repeated excessively — cite once as evidence, then argue from insight.",
+      });
+    }
+  }
+
+  if (/\b(key takeaway|in conclusion|according to (?:our )?blog)\b/i.test(copy)) {
+    issues.push({
+      type: "reference_summary_not_synthesis",
+      severity: "medium",
+      note: "Blog-summary cadence detected — rewrite into a crisp thesis with anchors supporting the claim.",
+    });
+  }
+
+  return issues;
+}
+
+function flagIncompleteEmailDraft(draft: CampaignExecutionDraft): ManagerContentIssue[] {
+  if (draft.type !== "email") return [];
+  const structured = draft.meta.email_detail;
+  const full = structured?.full_email?.trim() ?? "";
+
+  if (!structured?.greeting?.trim() || !structured?.proof_point?.trim() || !structured?.signoff?.trim()) {
+    return [
+      {
+        type: "incomplete_email_draft",
+        severity: "high",
+        note: "Email missing structured greeting/proof/signoff assembly — unusable as outbound.",
+      },
+    ];
+  }
+
+  if (full.length < 220 || !/\bHi\b/i.test(full)) {
+    return [
+      {
+        type: "incomplete_email_draft",
+        severity: "high",
+        note: "Email reads like fragments — expand into greeting, thesis paragraphs, proof point, CTA, and sign-off.",
+      },
+    ];
+  }
+
+  return [];
+}
+
+function flagWeakChannelFormat(draft: CampaignExecutionDraft): ManagerContentIssue[] {
+  const issues: ManagerContentIssue[] = [];
+
+  if (draft.meta.channel === "linkedin" && !draft.meta.channel_format?.trim()) {
+    issues.push({
+      type: "weak_channel_format",
+      severity: "medium",
+      note: "LinkedIn packaging lacks explicit channel_format (founder POV / teardown / etc.).",
+    });
+  }
+
+  if (draft.meta.channel === "instagram" && draft.type === "carousel") {
+    if (!draft.meta.visual_concept?.trim()) {
+      issues.push({
+        type: "weak_channel_format",
+        severity: "medium",
+        note: "Instagram visual_concept missing — anchor captions to a concrete scene.",
+      });
+    }
+    if (!draft.meta.image_prompt_detailed?.trim()) {
+      issues.push({
+        type: "weak_channel_format",
+        severity: "low",
+        note: "Instagram draft missing detailed image prompt payload.",
+      });
+    }
+  }
+
+  return issues;
+}
+
 function flagRepetitive(
   draft: CampaignExecutionDraft,
   allDrafts: CampaignExecutionDraft[],
@@ -413,6 +530,9 @@ export function reviewDraftAsManager(args: {
     ...flagWrongChannelVoice(draft, copy),
     ...flagWeakCta(draft),
     ...flagRepetitive(draft, allDrafts),
+    ...flagReferenceSummaryNotSynthesis(draft, copy),
+    ...flagIncompleteEmailDraft(draft),
+    ...flagWeakChannelFormat(draft),
   ];
 
   let score = 100;
@@ -476,12 +596,27 @@ function rewriteDeterministic(
       draft.subject_line.includes(String(draft.meta.day)) ?
         draft.subject_line
       : `${draft.subject_line} · ${draft.meta.day}`;
+    const detail = draft.meta.email_detail;
+    const mergedDetail =
+      detail ?
+        {
+          ...detail,
+          body: stripGenericPhrases(detail.body),
+          full_email: stripGenericPhrases(
+            `${detail.greeting}\n\n${detail.body}\n\n${detail.proof_point}\n\n${primaryCta}\n\n${detail.signoff}`,
+          ),
+        }
+      : undefined;
     return {
       draft: {
         ...draft,
         subject_line: subject,
         body_markdown: body,
         call_to_action: primaryCta,
+        meta: {
+          ...draft.meta,
+          email_detail: mergedDetail ?? draft.meta.email_detail,
+        },
       },
       instruction,
     };

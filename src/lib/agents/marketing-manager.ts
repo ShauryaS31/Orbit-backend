@@ -5,6 +5,7 @@ import type {
   CampaignExecutionDraft,
   CampaignEmailDraft,
   CampaignLinkedInPostDraft,
+  DraftEmailStructuredParts,
   GovernanceAuditEntry,
   LyraWarmIntelligence,
   ManagerContentReview,
@@ -24,6 +25,11 @@ import {
   createLinkedInPosterDraft,
 } from "@/lib/skills/formatting-skill";
 import { applyManagerContentReviews } from "@/lib/services/manager-content-review";
+import {
+  buildReferenceToInsightPlan,
+  type LinkedInChannelFormatId,
+  type ReferenceToInsightPlan,
+} from "@/lib/services/reference-to-insight";
 import { createGovernanceEntry } from "@/lib/services/governance-logger";
 import {
   classifyGoalKind,
@@ -113,7 +119,7 @@ export function runMarketingManagerAgent(input: ManagerInput): ManagerOutput {
   );
 
   if (input.carouselMaker) {
-    logs.push("[Scott]: Carousel Maker mode — Duncan Rogoff expert pipeline (single-pass).");
+    logs.push("[Scott]: Carousel Maker mode — brand-led 10-slide editorial carousel (single-pass).");
     const sopPrompt = buildChannelSopPrompt(
       "instagram",
       input.context,
@@ -555,36 +561,212 @@ function lyraDiversityPlan(): DiversityPlan[] {
   ];
 }
 
-function buildDetailedImagePrompt(input: ManagerInput, plan: DiversityPlan, channel: string): string {
+function buildDetailedImagePrompt(
+  input: ManagerInput,
+  plan: DiversityPlan,
+  channel: string,
+  sceneAccent?: string,
+): string {
   const motifs = LYRA_WARM_INTELLIGENCE.visual_motifs.join("; ");
   const avoid = LYRA_WARM_INTELLIGENCE.avoid_list.join(", ");
+  const scene =
+    sceneAccent ?
+      ` Priority scene cue (hyper-realistic, editorial documentary): ${sceneAccent}`
+    : "";
   return `A high-energy editorial visual for ${input.companyName} focused on "${plan.content_angle}". Subject: ${
     plan.visual_concept ?? "builder-native engineering collaboration"
-  }. Setting: Sydney or Melbourne startup office with real shipping cues (whiteboards, architecture notes, laptops, code reviews). Composition: medium-wide with layered foreground-to-background depth and a visible execution focal point. Camera/framing: documentary style with natural perspective and no staged corporate poses. Lighting: warm practical office lighting with high-contrast accent highlights. Color palette: ${input.brandKit.primary_hex}, ${input.brandKit.secondary_hex}, ${input.brandKit.accent_hex}. Typography direction: clean, minimal overlays that leave room for headline/CTA. Brand mood: strategic, technical, founder-first, builder-native. Lyra source anchor: ${plan.source_anchor}. Channel context: ${channel}. Optional motif cues: ${motifs}. Avoid: ${avoid}.`;
+  }. Setting: Sydney or Melbourne startup office with real shipping cues (whiteboards, architecture notes, laptops, code reviews). Composition: medium-wide with layered foreground-to-background depth and a visible execution focal point. Camera/framing: documentary style with natural perspective and no staged corporate poses. Lighting: warm practical office lighting with high-contrast accent highlights — avoid neon sci-fi glow or futuristic holograms unless explicitly requested. Color palette: ${input.brandKit.primary_hex}, ${input.brandKit.secondary_hex}, ${input.brandKit.accent_hex}. Typography direction: clean, minimal overlays that leave room for headline/CTA. Brand mood: strategic, technical, founder-first, builder-native. Evidence anchor (internal brief only — do not render as signage text): ${plan.source_anchor}. Channel context: ${channel}. Optional motif cues: ${motifs}. Avoid: ${avoid}.${scene}`;
 }
 
-function buildCarouselSlideCopy(input: ManagerInput, plan: DiversityPlan, sourceAnchor: string) {
-  const mission =
-    input.context.mission_statement ||
-    `${input.companyName} helps high-growth teams turn strategy into shipped work.`;
-  const hook = plan.hook ?? "Builder-native execution";
+function lyraEmailStage(day: number): "insight" | "proof" | "conversion" {
+  if (day <= 2) return "insight";
+  if (day <= 4) return "proof";
+  return "conversion";
+}
+
+function composeInsightLinkedInPost(args: {
+  insight: ReferenceToInsightPlan;
+  diversity: DiversityPlan;
+  input: ManagerInput;
+}): { headline: string; body: string; hook: string } {
+  const { insight, diversity, input } = args;
+  const format = insight.channel_format as LinkedInChannelFormatId;
+  const missionLead =
+    (input.context.mission_statement ?? "").split(".")[0]?.trim() ||
+    `${input.companyName} ships execution-heavy work alongside founders`;
+
+  let opener = "";
+  switch (format) {
+    case "contrarian_take":
+      opener = "Most teams optimize for the wrong bottleneck.\n\n";
+      break;
+    case "market_observation":
+      opener = "Pattern across operators who actually ship:\n\n";
+      break;
+    case "teardown_lesson":
+      opener = "Teardown a stalled roadmap and talent is rarely the root cause.\n\n";
+      break;
+    case "build_in_public":
+      opener = "Execution-side note:\n\n";
+      break;
+    case "mini_case_study":
+      opener = "Small situation, loud lesson:\n\n";
+      break;
+    case "carousel_thesis":
+      opener = "If this were one carousel slide, the thesis would be:\n\n";
+      break;
+    default:
+      opener = "";
+  }
+
+  const metricTail =
+    input.success_metric?.trim() ? `Measuring progress toward: ${input.success_metric.trim()}.` : "";
+
+  const body = [
+    opener + insight.strategic_insight,
+    "",
+    insight.campaign_angle,
+    "",
+    `Buying tension here: ${diversity.buyer_objection}`,
+    "",
+    `Operator frame: ${missionLead.slice(0, 220)}${missionLead.length > 220 ? "…" : ""}`,
+    "",
+    `Evidence (cite, do not recap): ${insight.extracted_fact}`,
+    "",
+    `${diversity.cta_text}${metricTail ? ` ${metricTail}` : ""}`,
+  ].join("\n");
+
+  const headline =
+    insight.campaign_angle.length >= 28 && insight.campaign_angle.length <= 220 ?
+      insight.campaign_angle
+    : `${input.companyName} · ${insight.strategic_insight.slice(0, 96)}${insight.strategic_insight.length > 96 ? "…" : ""}`;
+
+  const hookSentence = insight.strategic_insight.includes(".") ?
+    insight.strategic_insight.split(".")[0]!.trim() + "."
+  : insight.strategic_insight.trim();
+
+  return { headline, body, hook: hookSentence };
+}
+
+function composeInsightEmail(args: {
+  insight: ReferenceToInsightPlan;
+  diversity: DiversityPlan;
+  input: ManagerInput;
+  sourceAnchor: string;
+  day: number;
+}): {
+  subject_line: string;
+  preview_text: string;
+  body_markdown: string;
+  call_to_action: string;
+  email_detail: DraftEmailStructuredParts;
+} {
+  const { insight, diversity, input, sourceAnchor, day } = args;
+  const stage = lyraEmailStage(day);
+  const greeting = "Hi [Name],";
+  const signoff = "— Scott";
+  const goalLine = input.business_goal?.trim();
+  const metricLine = input.success_metric?.trim();
+
+  let subject_line = "";
+  let preview_text = "";
+  let body = "";
+
+  if (stage === "insight") {
+    subject_line = "quick thought on execution speed";
+    preview_text =
+      insight.strategic_insight.length > 110 ?
+        `${insight.strategic_insight.slice(0, 107)}…`
+      : insight.strategic_insight;
+    body = [
+      "Most teams do not lose speed because the engineers are weak.",
+      "",
+      "They lose speed because every decision has to survive too many handoffs before it ships.",
+      "",
+      `${insight.campaign_angle}`,
+      "",
+      `${input.companyName} is organized around dense operator ownership — fewer rituals, more inspectable execution.`,
+    ].join("\n");
+  } else if (stage === "proof") {
+    subject_line = "proof > polished positioning";
+    preview_text = `One concrete slice of how ${input.companyName} earns trust on delivery.`;
+    body = [
+      `${insight.strategic_insight}`,
+      "",
+      `${insight.campaign_angle}`,
+      "",
+      "When you evaluate a partner, the useful filter is whether their work survives messy integrations and real stakeholders — not whether the narrative sounds confident.",
+      "",
+      `Concrete evidence line (not a recap): ${insight.extracted_fact}`,
+    ].join("\n");
+  } else {
+    subject_line = "strategy call this week?";
+    preview_text =
+      goalLine ?
+        `${goalLine.slice(0, 110)}${goalLine.length > 110 ? "…" : ""}`
+      : `If velocity matters, ${input.companyName} is worth a fast filter conversation.`;
+    body = [
+      `${insight.strategic_insight}`,
+      "",
+      `${insight.campaign_angle}`,
+      "",
+      goalLine ? `You mentioned you're pushing toward: ${goalLine}.` : `If operator-grade execution is on your roadmap, this is the shortest path to pressure-test fit.`,
+      "",
+      `${diversity.cta_text}`,
+    ].join("\n");
+  }
+
+  const proof_point = [
+    `Cited execution signal (grounding only: ${sourceAnchor}):`,
+    insight.extracted_fact,
+  ].join(" ");
+
+  const cta_block = `${diversity.cta_text}${metricLine ? `\n\nContext metric you shared: ${metricLine}.` : ""}`;
+
+  const full_email = [greeting, "", body, "", proof_point, "", cta_block, "", signoff].join("\n");
+
+  return {
+    subject_line,
+    preview_text,
+    body_markdown: full_email,
+    call_to_action: diversity.cta_text,
+    email_detail: {
+      greeting,
+      body,
+      proof_point,
+      signoff,
+      full_email,
+    },
+  };
+}
+
+function buildInsightCarouselSlides(
+  diversity: DiversityPlan,
+  insight: ReferenceToInsightPlan,
+): Array<{ headline: string; body: string }> {
+  const hookHead =
+    diversity.hook ?
+      diversity.hook.length <= 40 ? diversity.hook
+      : `${diversity.hook.slice(0, 37)}…`
+    : insight.strategic_insight.length <= 40 ? insight.strategic_insight
+    : `${insight.strategic_insight.slice(0, 37)}…`;
 
   return [
     {
-      headline: hook.length > 30 ? "Look Behind The Build" : hook,
-      body: `${plan.content_angle}. This is the proof frame: ${sourceAnchor}.`,
+      headline: hookHead,
+      body: `${insight.strategic_insight}`,
     },
     {
-      headline: "The Real Friction",
-      body: `${plan.buyer_objection} That is the doubt this post has to answer without hype.`,
+      headline: "The buying doubt",
+      body: `${diversity.buyer_objection} ${insight.campaign_angle}`,
     },
     {
-      headline: "Proof In Motion",
-      body: `${mission.slice(0, 118)}${mission.length > 118 ? "..." : ""}`,
+      headline: "One evidence cut",
+      body: insight.extracted_fact,
     },
     {
-      headline: "Next Step",
-      body: plan.cta_text,
+      headline: "Next step",
+      body: diversity.cta_text,
     },
   ];
 }
@@ -619,40 +801,61 @@ function applyDraftDiversityAndVisualMetadata(
         `${draftPlan.source_anchor} (alternate evidence cut)`
       : draftPlan.source_anchor;
 
+    const insightPlan = buildReferenceToInsightPlan({
+      channel: draft.meta.channel,
+      source_anchor: sourceAnchor,
+      content_angle: draftPlan.content_angle,
+      business_goal: input.business_goal,
+      success_metric: input.success_metric,
+      lyraWarmIntelligence: input.lyra_warm_intelligence ?? (lyraMode ? LYRA_WARM_INTELLIGENCE : null),
+      brand_learning_notes: input.brand_learning_notes ?? [],
+      day: draft.meta.day,
+    });
+
+    const originality_notes = `${insightPlan.required_originality_rule} Sample recap-language guardrails: ${insightPlan.avoid_phrases.slice(0, 10).join("; ")}.`;
+
     const imagePromptDetailed = buildDetailedImagePrompt(
       input,
       { ...draftPlan, source_anchor: sourceAnchor },
       draft.meta.channel,
+      insightPlan.instagram_visual_scene,
     );
     const negativePrompt = LYRA_WARM_INTELLIGENCE.avoid_list.join(", ");
     const visualStyleNotes = `Use real execution motifs tied to ${sourceAnchor}; avoid generic AI startup stock imagery.`;
 
+    const phase7MetaBase = {
+      content_angle: draftPlan.content_angle,
+      source_anchor: sourceAnchor,
+      extracted_fact: insightPlan.extracted_fact,
+      strategic_insight: insightPlan.strategic_insight,
+      campaign_angle: insightPlan.campaign_angle,
+      channel_format: insightPlan.channel_format,
+      originality_notes,
+      reference_usage_policy: "evidence_only" as const,
+      buyer_objection: draftPlan.buyer_objection,
+      channel_strategy: draftPlan.channel_strategy,
+      cta_style: draftPlan.cta_style,
+      cta_text: draftPlan.cta_text,
+      image_prompt_detailed: imagePromptDetailed,
+      negative_prompt: negativePrompt,
+      visual_source_anchor: sourceAnchor,
+      visual_style_notes: visualStyleNotes,
+    };
+
     if (draft.type === "linkedin_post") {
-      const headlineByAngle = `${draftPlan.content_angle.split("->")[0].trim()}: ${input.companyName} proof`;
-      const body = [
-        `Most founder teams are not blocked by ideas. They are blocked by execution friction and weak proof chains.`,
-        `Lyra anchor: ${sourceAnchor}.`,
-        `Angle: ${draftPlan.content_angle}.`,
-        `Objection addressed: ${draftPlan.buyer_objection}.`,
-        `This is why Lyra is not a generic agency story. It is a builder-native execution system with concrete project outcomes.`,
-        `${draftPlan.cta_text}.`,
-      ].join("\n\n");
+      const composed = composeInsightLinkedInPost({
+        insight: insightPlan,
+        diversity: draftPlan,
+        input,
+      });
       return {
         ...draft,
-        headline: headlineByAngle,
-        body,
+        headline: composed.headline,
+        body: composed.body,
         meta: {
           ...draft.meta,
-          content_angle: draftPlan.content_angle,
-          source_anchor: sourceAnchor,
-          buyer_objection: draftPlan.buyer_objection,
-          channel_strategy: draftPlan.channel_strategy,
-          cta_style: draftPlan.cta_style,
-          cta_text: draftPlan.cta_text,
-          image_prompt_detailed: imagePromptDetailed,
-          negative_prompt: negativePrompt,
-          visual_source_anchor: sourceAnchor,
-          visual_style_notes: visualStyleNotes,
+          ...phase7MetaBase,
+          hook: composed.hook,
         },
       };
     }
@@ -662,44 +865,39 @@ function applyDraftDiversityAndVisualMetadata(
         draft.meta.day <= 2 ? "email 1: insight/problem"
         : draft.meta.day <= 4 ? "email 2: proof/case evidence"
         : "email 3: conversion/strategy call";
-      const subject =
-        emailStage === "email 1: insight/problem" ? "where founder teams lose execution speed"
-        : emailStage === "email 2: proof/case evidence" ? "proof from real lyra delivery work"
-        : "quick strategy call on your execution bottlenecks";
-      const body = [
-        `This is ${emailStage}.`,
-        `Problem/angle: ${draftPlan.content_angle}.`,
-        `Proof anchor: ${sourceAnchor}.`,
-        `Buyer objection we're resolving: ${draftPlan.buyer_objection}.`,
-        `Why this matters: Lyra's culture-to-execution model translates into faster shipping and clearer accountability.`,
-        `CTA: ${draftPlan.cta_text}.`,
-      ].join("\n\n");
+      const mail = composeInsightEmail({
+        insight: insightPlan,
+        diversity: draftPlan,
+        input,
+        sourceAnchor,
+        day: draft.meta.day,
+      });
       return {
         ...draft,
-        subject_line: subject,
-        preview_text: draftPlan.content_angle,
-        body_markdown: body,
-        call_to_action: draftPlan.cta_text,
+        subject_line: mail.subject_line,
+        preview_text: mail.preview_text,
+        body_markdown: mail.body_markdown,
+        call_to_action: mail.call_to_action,
         meta: {
           ...draft.meta,
-          content_angle: draftPlan.content_angle,
-          source_anchor: sourceAnchor,
-          buyer_objection: draftPlan.buyer_objection,
+          ...phase7MetaBase,
           channel_strategy: `${draftPlan.channel_strategy} (${emailStage})`,
-          cta_style: draftPlan.cta_style,
-          cta_text: draftPlan.cta_text,
-          image_prompt_detailed: imagePromptDetailed,
-          negative_prompt: negativePrompt,
-          visual_source_anchor: sourceAnchor,
-          visual_style_notes: visualStyleNotes,
+          email_detail: mail.email_detail,
         },
       };
     }
 
     const slideNarrative =
-      draftPlan.story_frame_sequence ??
-      ["Hook", "Proof", "Execution signal", "CTA"];
-    const slideCopy = buildCarouselSlideCopy(input, draftPlan, sourceAnchor);
+      lyraMode ?
+        [
+          `Story 1 — ${insightPlan.instagram_visual_scene ?? draftPlan.visual_concept ?? "Builder table energy"}`,
+          `Story 2 — Buyer tension: ${draftPlan.buyer_objection}`,
+          `Story 3 — Evidence cut tied to cited anchor`,
+          `Story 4 — CTA: ${draftPlan.cta_text}`,
+        ]
+      : draftPlan.story_frame_sequence ??
+        ["Hook", "Proof", "Execution signal", "CTA"];
+    const slideCopy = buildInsightCarouselSlides(draftPlan, insightPlan);
     const slides = draft.slides.map((slide, slideIdx) => {
       const label = slideNarrative[slideIdx] ?? `Frame ${slideIdx + 1}`;
       const detailed = `${imagePromptDetailed} Frame: ${label}.`;
@@ -724,9 +922,29 @@ function applyDraftDiversityAndVisualMetadata(
           : slide.design_artifact,
       };
     });
+    const igHook =
+      insightPlan.strategic_insight.includes(".") ?
+        `${insightPlan.strategic_insight.split(".")[0]!.trim()}.`
+      : insightPlan.strategic_insight.trim();
+    const captionTension =
+      draftPlan.buyer_objection.trim().endsWith("?") ?
+        draftPlan.buyer_objection.trim()
+      : `${draftPlan.buyer_objection.trim()} — fair?`;
+    const visualConceptResolved =
+      draftPlan.visual_concept ?? insightPlan.instagram_visual_scene ?? "Builder-native engineering collaboration";
     return {
       ...draft,
-      caption: `${draftPlan.hook ?? "Builder-native execution"}\n\n${draftPlan.content_angle}\nSource: ${sourceAnchor}\nCTA: ${draftPlan.cta_text}`,
+      caption: [
+        captionTension,
+        "",
+        igHook,
+        "",
+        insightPlan.campaign_angle,
+        "",
+        `Visual concept: ${visualConceptResolved}`,
+        "",
+        `CTA: ${draftPlan.cta_text}`,
+      ].join("\n"),
       slides,
       card_config: {
         ...draft.card_config,
@@ -735,19 +953,10 @@ function applyDraftDiversityAndVisualMetadata(
       },
       meta: {
         ...draft.meta,
-        content_angle: draftPlan.content_angle,
-        source_anchor: sourceAnchor,
-        buyer_objection: draftPlan.buyer_objection,
-        channel_strategy: draftPlan.channel_strategy,
-        cta_style: draftPlan.cta_style,
-        cta_text: draftPlan.cta_text,
-        hook: draftPlan.hook,
-        visual_concept: draftPlan.visual_concept,
+        ...phase7MetaBase,
+        hook: draftPlan.hook ?? igHook,
+        visual_concept: visualConceptResolved,
         story_frame_sequence: slideNarrative,
-        image_prompt_detailed: imagePromptDetailed,
-        negative_prompt: negativePrompt,
-        visual_source_anchor: sourceAnchor,
-        visual_style_notes: visualStyleNotes,
       },
     };
   });
