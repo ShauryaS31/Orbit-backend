@@ -8,6 +8,7 @@ import type {
   ManagerCritique,
   ManagerCritiqueReasonCode,
   ProductMarketingContext,
+  TrendScoutResult,
 } from "@/lib/types/orbit";
 import { createGovernanceEntry } from "@/lib/services/governance-logger";
 
@@ -43,6 +44,7 @@ export interface ManagerReviewDraftContext {
   successMetric?: string;
   brandLearningNotes: string[];
   lyraWarmIntelligence?: LyraWarmIntelligence;
+  trendIntelligence?: TrendScoutResult;
   context: ProductMarketingContext;
 }
 
@@ -83,6 +85,8 @@ const ISSUE_TYPE_REVISION_HINT: Partial<Record<ManagerContentIssue["type"], stri
     "assemble a send-ready email (subject + preview + greeting + multi-paragraph body + proof point + CTA + sign-off)",
   weak_channel_format:
     "assign explicit channel_format / visual_concept so packaging matches native LinkedIn or Instagram expectations",
+  trend_context_ignored:
+    "use one current public-web trend angle as context (without copying source text) while keeping company proof anchors primary",
 };
 
 /**
@@ -157,6 +161,9 @@ function mapIssuesToReasonCodes(issues: ManagerContentIssue[]): ManagerCritiqueR
         break;
       case "weak_channel_format":
         out.add("visual_too_generic");
+        break;
+      case "trend_context_ignored":
+        out.add("generic_channel_fit");
         break;
       default:
         break;
@@ -638,6 +645,22 @@ function flagWeakChannelFormat(draft: CampaignExecutionDraft): ManagerContentIss
   return issues;
 }
 
+function flagTrendContextIgnored(
+  draft: CampaignExecutionDraft,
+  ctx: ManagerReviewDraftContext,
+): ManagerContentIssue[] {
+  const trend = ctx.trendIntelligence;
+  if (!trend || trend.status !== "searched" || trend.insights.length === 0) return [];
+  if (draft.meta.trend_angle?.trim()) return [];
+  return [
+    {
+      type: "trend_context_ignored",
+      severity: "low",
+      note: "Trend scout context is available but this draft does not reference any trend angle.",
+    },
+  ];
+}
+
 function flagRepetitive(
   draft: CampaignExecutionDraft,
   allDrafts: CampaignExecutionDraft[],
@@ -715,6 +738,7 @@ export function reviewDraftAsManager(args: {
     ...flagReferenceSummaryNotSynthesis(draft, copy),
     ...flagIncompleteEmailDraft(draft),
     ...flagWeakChannelFormat(draft),
+    ...flagTrendContextIgnored(draft, ctx),
   ];
 
   let score = 100;

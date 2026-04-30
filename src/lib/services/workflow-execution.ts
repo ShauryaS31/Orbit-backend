@@ -8,6 +8,7 @@ import { createCampaignWorkspace } from "@/lib/services/file-system";
 import { appendGovernanceLog, createGovernanceEntry } from "@/lib/services/governance-logger";
 import { SKILL_IDS } from "@/lib/services/skill-catalog";
 import { generateBrandBackground } from "@/lib/services/image-generator";
+import { runTrendScout } from "@/lib/services/trend-scout";
 import { workflowStore } from "@/lib/state/workflow-store";
 import type { CampaignExecutionDraft, GeneratedCampaignAsset } from "@/lib/types/orbit";
 
@@ -119,6 +120,84 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
   });
   await thinkTime(workflow.demo_mode && !workflow.carousel_maker_mode);
 
+  const trendEnabled = process.env.ENABLE_TREND_SCOUT === "true";
+  if (!trendEnabled) {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: "[Nova]: Trend Scout skipped because ENABLE_TREND_SCOUT is off.",
+    });
+  } else {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: "[Nova]: Searching public web for current market and content trends...",
+    });
+  }
+
+  const trendResult = await runTrendScout({
+    companyName: workflow.website_intelligence.company_name,
+    companyUrl: workflow.company_url,
+    websiteIntelligence: workflow.website_intelligence,
+    businessGoal: workflow.business_goal,
+    successMetric: workflow.success_metric,
+    brandLearningNotes: workflow.brand_learning_notes,
+    lyraWarmIntelligence: workflow.lyra_warm_intelligence,
+  });
+
+  workflowStore.updateWorkflow(workflowId, {
+    trend_intelligence: trendResult,
+  });
+
+  if (trendResult.status === "searched") {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: `[Nova]: Found ${trendResult.insights.length} trend insights with cited public sources.`,
+    });
+    appendGovernanceLog(
+      workflowId,
+      createGovernanceEntry({
+        agent_id: "researcher",
+        display_agent_name: "Nova",
+        step_id: "marketing_context_built",
+        decision: "Ran Nova Trend Scout via OpenAI web_search for current public context.",
+        rationale: `Status=${trendResult.status}; insights=${trendResult.insights.length}; sources=${trendResult.sources.length}. Public web only, no private social scraping claims.`,
+        resulting_asset: "trend_intelligence",
+        source_url: workflow.company_url,
+      }),
+    );
+  } else if (trendResult.status === "failed") {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: "[Nova]: Trend Scout failed safely; continuing with approved company intelligence.",
+    });
+    appendGovernanceLog(
+      workflowId,
+      createGovernanceEntry({
+        agent_id: "researcher",
+        display_agent_name: "Nova",
+        step_id: "marketing_context_built",
+        decision: "Trend Scout failed safely and workflow continued.",
+        rationale: trendResult.error_summary ?? "No error summary available.",
+        resulting_asset: "trend_intelligence",
+      }),
+    );
+  } else if (trendResult.status === "skipped_missing_key") {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: "[Nova]: Trend Scout skipped because OPENAI_API_KEY is missing.",
+    });
+  } else if (trendResult.status === "skipped") {
+    workflowStore.addLog(workflowId, {
+      role: "researcher",
+      step_id: "marketing_context_built",
+      message: `[Nova]: Trend Scout skipped (${trendResult.notes?.[0] ?? "disabled or gated"}).`,
+    });
+  }
+
   if (workflow.carousel_maker_mode) {
     workflowStore.addLog(workflowId, {
       role: "carousel_specialist",
@@ -139,6 +218,7 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
     success_metric: workflow.success_metric,
     brand_learning_notes: workflow.brand_learning_notes,
     lyra_warm_intelligence: workflow.lyra_warm_intelligence,
+    trend_intelligence: trendResult,
   });
 
   for (const entry of managerOutput.governance_entries ?? []) {

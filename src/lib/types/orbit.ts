@@ -94,7 +94,8 @@ export type ManagerContentIssueType =
   | "repetitive"
   | "reference_summary_not_synthesis"
   | "incomplete_email_draft"
-  | "weak_channel_format";
+  | "weak_channel_format"
+  | "trend_context_ignored";
 
 /** How tightly draft copy may mirror dossier language (Phase 7 — evidence-led synthesis). */
 export type ReferenceUsagePolicy = "evidence_only" | "direct_quote_approved" | "unknown";
@@ -157,6 +158,40 @@ export interface ManagerCritique {
   linkedReviewScore?: number;
   linkedReviewDecision?: "approve" | "revise";
   createdAt: string;
+}
+
+export type TrendScoutStatus =
+  | "skipped"
+  | "skipped_missing_key"
+  | "searched"
+  | "failed";
+
+export interface TrendSource {
+  title?: string;
+  url: string;
+  domain?: string;
+  snippet?: string;
+}
+
+export interface TrendInsight {
+  id: string;
+  trend: string;
+  implication: string;
+  recommended_angle: string;
+  confidence: number;
+  sources: TrendSource[];
+}
+
+export interface TrendScoutResult {
+  status: TrendScoutStatus;
+  enabled: boolean;
+  model?: string;
+  generated_at: string;
+  query_set: string[];
+  insights: TrendInsight[];
+  sources: TrendSource[];
+  notes?: string[];
+  error_summary?: string;
 }
 
 /** Audit trail entry for goal-driven orchestration and governance exports. */
@@ -236,6 +271,11 @@ export interface DraftMetadata {
 
   /** Phase 7 — usable outbound email decomposition + assembled message. */
   email_detail?: DraftEmailStructuredParts;
+  /** Optional trend context applied by Nova Trend Scout (Phase 7D). */
+  trend_insight_id?: string;
+  trend_angle?: string;
+  trend_sources?: TrendSource[];
+  trend_selection_reason?: string;
 }
 
 export interface WebsiteIntelligence {
@@ -506,5 +546,7 @@ export interface WorkflowState {
   manager_content_reviews?: ManagerContentReview[];
   /** Phase 7B — aggregated Scott critiques (same order as reviews / drafts after QA). */
   manager_critiques?: ManagerCritique[];
+  /** Phase 7D — optional public-web trend enrichment (env gated; workflow remains resilient if skipped/failed). */
+  trend_intelligence?: TrendScoutResult;
   error_message?: string;
 }

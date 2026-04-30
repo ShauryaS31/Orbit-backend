@@ -12,6 +12,9 @@ import type {
   ManagerCritique,
   ManagerWorkflowStep,
   ProductMarketingContext,
+  TrendInsight,
+  TrendScoutResult,
+  TrendSource,
   VisualIdentity,
   WorkflowState,
   WorkflowStepId,
@@ -55,6 +58,8 @@ export interface ManagerInput {
   brand_learning_notes?: string[];
   /** Warm-cache dossier — tightens overlap checks without implying extra crawl. */
   lyra_warm_intelligence?: LyraWarmIntelligence;
+  /** Optional public-web trend layer from Nova Trend Scout (Phase 7D). */
+  trend_intelligence?: TrendScoutResult;
 }
 
 export interface ManagerOutput {
@@ -92,6 +97,7 @@ function mergeManagerReviewPass(
     successMetric: input.success_metric,
     brandLearningNotes: input.brand_learning_notes ?? [],
     lyraWarmIntelligence: input.lyra_warm_intelligence,
+    trendIntelligence: input.trend_intelligence,
     context: input.context,
   });
   return {
@@ -782,6 +788,61 @@ function buildInsightCarouselSlides(
   ];
 }
 
+function trendInsightsAvailable(input: ManagerInput): TrendInsight[] {
+  const trend = input.trend_intelligence;
+  if (!trend || trend.status !== "searched") return [];
+  return trend.insights ?? [];
+}
+
+interface TrendPick {
+  insight?: TrendInsight;
+  reason: string;
+}
+
+function chooseTrendForDraft(args: {
+  draft: CampaignExecutionDraft;
+  input: ManagerInput;
+  previousTrendInsightId?: string;
+  channelLastUsed: Map<CampaignExecutionDraft["meta"]["channel"], string>;
+}): TrendPick {
+  const { draft, input, previousTrendInsightId, channelLastUsed } = args;
+  const insights = trendInsightsAvailable(input);
+  if (insights.length === 0) return { insight: undefined, reason: "trend scout unavailable or no insights" };
+  if (insights.length === 1) return { insight: insights[0], reason: "single available insight reused safely" };
+
+  const keywordsByChannel: Record<CampaignExecutionDraft["meta"]["channel"], string[]> = {
+    linkedin: ["founder", "operator", "market", "pov", "leadership", "b2b", "positioning", "linkedin"],
+    instagram: ["community", "visual", "social", "content", "format", "creator", "culture", "video", "reel"],
+    email: ["buyer", "conversion", "proof", "outreach", "pipeline", "cta", "reply", "bookings"],
+  };
+
+  const channel = draft.meta.channel;
+  const blobScore = (insight: TrendInsight): number => {
+    const blob = `${insight.trend} ${insight.implication} ${insight.recommended_angle}`.toLowerCase();
+    return keywordsByChannel[channel].reduce((s, kw) => s + (blob.includes(kw) ? 1 : 0), 0);
+  };
+
+  const sorted = [...insights].sort((a, b) => {
+    const score = blobScore(b) - blobScore(a);
+    if (score !== 0) return score;
+    return b.confidence - a.confidence;
+  });
+
+  const channelPrev = channelLastUsed.get(channel);
+  const candidates = sorted.filter((i) => i.id !== previousTrendInsightId && i.id !== channelPrev);
+  const picked =
+    candidates[0] ??
+    sorted.find((i) => i.id !== previousTrendInsightId) ??
+    sorted[0];
+
+  const reason =
+    picked.id !== (sorted[0]?.id ?? "") ?
+      `selected for diversity (avoiding consecutive/channel reuse); channel=${channel}`
+    : `best channel fit for ${channel} by keyword/confidence scoring`;
+
+  return { insight: picked, reason };
+}
+
 function applyDraftDiversityAndVisualMetadata(
   drafts: CampaignExecutionDraft[],
   input: ManagerInput,
@@ -792,6 +853,8 @@ function applyDraftDiversityAndVisualMetadata(
   const governance: GovernanceAuditEntry[] = [];
   const lyraMode = isLyraInput(input);
   const plan = lyraMode ? lyraDiversityPlan() : [];
+  const trendChannelLastUsed = new Map<CampaignExecutionDraft["meta"]["channel"], string>();
+  let previousTrendInsightId: string | undefined;
 
   const enhanced = drafts.map((draft, index) => {
     const draftPlan =
@@ -833,6 +896,18 @@ function applyDraftDiversityAndVisualMetadata(
     );
     const negativePrompt = LYRA_WARM_INTELLIGENCE.avoid_list.join(", ");
     const visualStyleNotes = `Use real execution motifs tied to ${sourceAnchor}; avoid generic AI startup stock imagery.`;
+    const trendPick = chooseTrendForDraft({
+      draft,
+      input,
+      previousTrendInsightId,
+      channelLastUsed: trendChannelLastUsed,
+    });
+    const trendInsight = trendPick.insight;
+    const trendSources: TrendSource[] = trendInsight?.sources?.slice(0, 3) ?? [];
+    if (trendInsight?.id) {
+      previousTrendInsightId = trendInsight.id;
+      trendChannelLastUsed.set(draft.meta.channel, trendInsight.id);
+    }
 
     const phase7MetaBase = {
       content_angle: draftPlan.content_angle,
@@ -851,6 +926,10 @@ function applyDraftDiversityAndVisualMetadata(
       negative_prompt: negativePrompt,
       visual_source_anchor: sourceAnchor,
       visual_style_notes: visualStyleNotes,
+      trend_insight_id: trendInsight?.id,
+      trend_angle: trendInsight?.recommended_angle,
+      trend_sources: trendSources,
+      trend_selection_reason: trendInsight ? trendPick.reason : undefined,
     };
 
     if (draft.type === "linkedin_post") {
@@ -859,10 +938,11 @@ function applyDraftDiversityAndVisualMetadata(
         diversity: draftPlan,
         input,
       });
+      const trendLine = trendInsight ? `Current trend context: ${trendInsight.recommended_angle}` : undefined;
       return {
         ...draft,
         headline: composed.headline,
-        body: composed.body,
+        body: trendLine ? `${composed.body}\n\n${trendLine}` : composed.body,
         meta: {
           ...draft.meta,
           ...phase7MetaBase,
@@ -883,17 +963,25 @@ function applyDraftDiversityAndVisualMetadata(
         sourceAnchor,
         day: draft.meta.day,
       });
+      const trendContext = trendInsight ? `Trend context: ${trendInsight.recommended_angle}` : undefined;
+      const fullEmailWithTrend =
+        trendContext && mail.email_detail.full_email ?
+          `${mail.email_detail.full_email}\n\n${trendContext}`
+        : mail.email_detail.full_email;
       return {
         ...draft,
         subject_line: mail.subject_line,
         preview_text: mail.preview_text,
-        body_markdown: mail.body_markdown,
+        body_markdown: trendContext ? `${mail.body_markdown}\n\n${trendContext}` : mail.body_markdown,
         call_to_action: mail.call_to_action,
         meta: {
           ...draft.meta,
           ...phase7MetaBase,
           channel_strategy: `${draftPlan.channel_strategy} (${emailStage})`,
-          email_detail: mail.email_detail,
+          email_detail: {
+            ...mail.email_detail,
+            full_email: fullEmailWithTrend,
+          },
         },
       };
     }
@@ -954,6 +1042,7 @@ function applyDraftDiversityAndVisualMetadata(
         "",
         `Visual concept: ${visualConceptResolved}`,
         "",
+        ...(trendInsight ? [`Trend lens: ${trendInsight.recommended_angle}`, ""] : []),
         `CTA: ${draftPlan.cta_text}`,
       ].join("\n"),
       slides,
@@ -994,6 +1083,24 @@ function applyDraftDiversityAndVisualMetadata(
         rationale:
           "Visual prompts are anchored to dossier proof points (Fellowship, Lyrathon, Anthropic, Melbourne, client delivery) and include explicit avoid-lists.",
         resulting_asset: "image_prompt_detailed",
+      }),
+    );
+  }
+
+  const trend = input.trend_intelligence;
+  if (trend?.status === "searched" && trend.insights.length > 0) {
+    const used = enhanced.filter((d) => Boolean(d.meta.trend_angle)).length;
+    logs.push(
+      `[Scott]: Applied Nova Trend Scout context to ${used}/${enhanced.length} drafts without replacing proof anchors.`,
+    );
+    governance.push(
+      createGovernanceEntry({
+        agent_id: "marketing_manager",
+        display_agent_name: "Scott",
+        step_id: "campaign_draft_generated",
+        decision: "Blended public trend context into draft angles.",
+        rationale: `Trend scout status=${trend.status}; insights=${trend.insights.length}; drafts_with_trend=${used}. Company proof anchors remain primary evidence.`,
+        resulting_asset: "trend_intelligence",
       }),
     );
   }

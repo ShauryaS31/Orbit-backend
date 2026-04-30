@@ -6,6 +6,7 @@ import {
   NOVAS_RESEARCH_REPORT_TITLE,
   type ManagerContentReview,
   type ManagerCritique,
+  type TrendScoutResult,
 } from "@/lib/types/orbit";
 
 interface RouteParams {
@@ -254,6 +255,8 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     govTable,
     "",
+    buildTrendScoutSection(workflow.trend_intelligence),
+    "",
     "## Visual intelligence stack",
     "",
     "| Lens | Observation |",
@@ -329,6 +332,62 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
 
 function escapePipes(value: string): string {
   return value.replace(/\|/g, "\\|");
+}
+
+function buildTrendScoutSection(trend: TrendScoutResult | undefined): string {
+  if (!trend) {
+    return [
+      "## Nova Trend Scout",
+      "",
+      "_No trend scout payload on this workflow._",
+    ].join("\n");
+  }
+
+  const sourceRows = trend.sources
+    .slice(0, 25)
+    .map((s) => `- [${s.title ?? s.domain ?? s.url}](${s.url})`)
+    .join("\n");
+
+  const insightRows = trend.insights
+    .map((i) => {
+      const links =
+        i.sources?.length ?
+          i.sources
+            .slice(0, 3)
+            .map((s) => `[${s.title ?? s.domain ?? "source"}](${s.url})`)
+            .join(", ")
+        : "-";
+      return `| ${escapePipes(i.trend)} | ${escapePipes(i.implication)} | ${escapePipes(i.recommended_angle)} | ${i.confidence} | ${escapePipes(links)} |`;
+    })
+    .join("\n");
+
+  return [
+    "## Nova Trend Scout",
+    "",
+    "_Public web-search context only. No private social-feed scraping claims._",
+    "",
+    `- **Status:** ${trend.status}`,
+    `- **Enabled:** ${trend.enabled ? "true" : "false"}`,
+    `- **Model:** ${trend.model ?? "-"}`,
+    `- **Generated at:** ${trend.generated_at}`,
+    `- **Insights:** ${trend.insights.length}`,
+    `- **Unique sources:** ${trend.sources.length}`,
+    "",
+    "**Query set**",
+    "",
+    ...(trend.query_set.length ? trend.query_set.map((q) => `- ${q}`) : ["- _none_"]),
+    "",
+    "| Trend | Implication | Recommended angle | Confidence | Sources |",
+    "| --- | --- | --- | --- | --- |",
+    insightRows || "| - | - | - | - | - |",
+    "",
+    "**Public sources**",
+    "",
+    sourceRows || "_No parsed sources._",
+    "",
+    ...(trend.notes?.length ? ["**Notes**", "", ...trend.notes.map((n) => `- ${n}`), ""] : []),
+    ...(trend.error_summary ? [`**Error summary:** ${escapePipes(trend.error_summary)}`, ""] : []),
+  ].join("\n");
 }
 
 function collectWorkflowCritiques(
