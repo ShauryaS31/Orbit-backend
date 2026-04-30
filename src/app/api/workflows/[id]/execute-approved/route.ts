@@ -4,7 +4,6 @@ import { getDraftPlainText } from "@/lib/agents/draft-utils";
 import type { SchedulePostResult } from "@/lib/services/social-orchestrator";
 import {
   createSandboxSchedulePostResult,
-  isAyrshareProductionBlocked,
   schedulePost,
 } from "@/lib/services/social-orchestrator";
 import { resolveAbsoluteAssetUrl } from "@/lib/services/public-assets";
@@ -83,13 +82,6 @@ export async function POST(request: Request, context: RouteParams) {
   }
 
   const sandbox = process.env.SOCIAL_SANDBOX === "true";
-  if (!sandbox && isAyrshareProductionBlocked()) {
-    return NextResponse.json(
-      { error: "AYRSHARE_API_KEY is required when SOCIAL_SANDBOX is not enabled." },
-      { status: 503 },
-    );
-  }
-
   const explicitSchedule = Boolean(scheduleRaw);
   const isFutureScheduled = targetDate.getTime() > Date.now() + 2000;
   const nextStatus = isFutureScheduled ? "scheduled" : "published";

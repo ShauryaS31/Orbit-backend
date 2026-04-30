@@ -266,6 +266,18 @@ class WorkflowActivityLogSnapshot(BaseModel):
     createdAt: str
 
 
+class AgentWorkflowMemory(BaseModel):
+    workOrderId: str
+    workflowId: str
+    managerAgentId: str | None = None
+    managerAgentName: str | None = None
+    companyName: str | None = None
+    taskSummary: str
+    payload: dict[str, Any]
+    createdAt: str
+    updatedAt: str
+
+
 class WorkflowSnapshotSyncRequest(BaseModel):
     workflowId: str
     status: str
@@ -282,6 +294,7 @@ class WorkflowSnapshotSyncResponse(BaseModel):
     tasks: list[WorkflowTaskSnapshot]
     activityLogsStored: int
     finalOutputStored: bool
+    memoryStored: bool = False
 
 
 class HealthResponse(BaseModel):

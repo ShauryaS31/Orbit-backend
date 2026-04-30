@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from app import database
 from app.models import (
+    AgentWorkflowMemory,
     FinalOutputRequest,
     ManagerPlanPreviewRequest,
     ManagerPlanPreviewResponse,
@@ -88,6 +89,17 @@ def get_final_output(work_order_id: str) -> WorkOrderOutput:
     if not output:
         raise HTTPException(status_code=404, detail="Final output not found")
     return output
+
+
+@router.get("/{work_order_id}/agent-memory", response_model=AgentWorkflowMemory)
+def get_agent_workflow_memory(work_order_id: str) -> AgentWorkflowMemory:
+    if not database.get_work_order(work_order_id):
+        raise HTTPException(status_code=404, detail="Work order not found")
+
+    memory = database.get_agent_workflow_memory(work_order_id)
+    if not memory:
+        raise HTTPException(status_code=404, detail="Agent workflow memory not found")
+    return memory
 
 
 @router.post("/{work_order_id}/workflow-sync", response_model=WorkflowSnapshotSyncResponse)

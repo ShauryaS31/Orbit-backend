@@ -1,9 +1,37 @@
 import { NextResponse } from "next/server";
 
-import { publishInstagramTestPost } from "@/lib/services/instagram-publishing";
+import {
+  publishInstagramImagePost,
+  publishInstagramTestPost,
+} from "@/lib/services/instagram-publishing";
 
-export async function POST() {
+type PublishTestBody = {
+  mediaUrl?: string;
+  media_url?: string;
+  caption?: string;
+};
+
+export async function POST(request: Request) {
   try {
+    const body = (await request.json().catch(() => ({}))) as PublishTestBody;
+    const mediaUrl = body.mediaUrl?.trim() || body.media_url?.trim();
+    const caption = body.caption?.trim();
+
+    if (mediaUrl) {
+      return NextResponse.json(
+        await publishInstagramImagePost({
+          mediaUrl,
+          caption:
+            caption ||
+            [
+              "Orbit Instagram integration test.",
+              "This post was published from a Cloudflare-hosted generated asset after explicit operator approval.",
+              `Timestamp: ${new Date().toISOString()}`,
+            ].join("\n\n"),
+        }),
+      );
+    }
+
     return NextResponse.json(await publishInstagramTestPost());
   } catch (error) {
     return NextResponse.json(

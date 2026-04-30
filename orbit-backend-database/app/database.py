@@ -15,6 +15,7 @@ from app.models import (
     ContextSectionId,
     DepartmentContextLog,
     EditableContextSectionId,
+    AgentWorkflowMemory,
     MapPreset,
     MarketingAgentRosterItem,
     OfficeMap,
@@ -109,6 +110,18 @@ CREATE TABLE IF NOT EXISTS workflow_activity_logs (
   message TEXT NOT NULL,
   payload TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_workflow_memory (
+  workflow_id TEXT PRIMARY KEY,
+  work_order_id TEXT NOT NULL,
+  manager_agent_id TEXT,
+  manager_agent_name TEXT,
+  company_name TEXT,
+  task_summary TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS office_maps (
@@ -207,6 +220,18 @@ def ensure_workflow_tables(db: sqlite3.Connection) -> None:
           message TEXT NOT NULL,
           payload TEXT NOT NULL,
           created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_workflow_memory (
+          workflow_id TEXT PRIMARY KEY,
+          work_order_id TEXT NOT NULL,
+          manager_agent_id TEXT,
+          manager_agent_name TEXT,
+          company_name TEXT,
+          task_summary TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
         """
     )
@@ -574,6 +599,43 @@ def get_work_order_output(work_order_id: str):
     )
 
 
+def get_agent_workflow_memory(work_order_id: str) -> AgentWorkflowMemory | None:
+    with connect() as db:
+        ensure_workflow_tables(db)
+        row = db.execute(
+            """
+            SELECT
+              work_order_id,
+              workflow_id,
+              manager_agent_id,
+              manager_agent_name,
+              company_name,
+              task_summary,
+              payload,
+              created_at,
+              updated_at
+            FROM agent_workflow_memory
+            WHERE work_order_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (work_order_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return AgentWorkflowMemory(
+        workOrderId=row["work_order_id"],
+        workflowId=row["workflow_id"],
+        managerAgentId=row["manager_agent_id"],
+        managerAgentName=row["manager_agent_name"],
+        companyName=row["company_name"],
+        taskSummary=row["task_summary"],
+        payload=json.loads(row["payload"]),
+        createdAt=row["created_at"],
+        updatedAt=row["updated_at"],
+    )
+
+
 def add_event(db: sqlite3.Connection, work_order_id: str, event_type: str, message: str) -> None:
     db.execute(
         "INSERT INTO work_order_events (work_order_id, type, message, created_at) VALUES (?, ?, ?, ?)",
@@ -689,6 +751,16 @@ def _status_from_workflow(workflow_status: str, tasks: list[dict]) -> WorkOrderS
     return "complete"
 
 
+def _manager_summary_report(workflow: dict) -> dict | None:
+    report = workflow.get("manager_summary_report")
+    return report if isinstance(report, dict) else None
+
+
+def _report_text(report: dict, key: str, fallback: str = "") -> str:
+    value = report.get(key)
+    return str(value).strip() if value is not None and str(value).strip() else fallback
+
+
 def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequest) -> WorkflowSnapshotSyncResponse | None:
     work_order = get_work_order(work_order_id)
     if not work_order:
@@ -709,6 +781,7 @@ def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequ
 
     task_snapshots: list[WorkflowTaskSnapshot] = []
     log_snapshots: list[WorkflowActivityLogSnapshot] = []
+    memory_stored = False
 
     with connect() as db:
         ensure_workflow_tables(db)
@@ -877,6 +950,50 @@ def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequ
                 (work_order_id, request.outputType, dumps_dict(request.finalOutput), timestamp),
             )
 
+        manager_report = _manager_summary_report(request.workflow)
+        if manager_report is not None:
+            report_created_at = _report_text(manager_report, "generated_at", timestamp)
+            manager_agent_id = _report_text(manager_report, "manager_agent_id", None)  # type: ignore[arg-type]
+            manager_agent_name = _report_text(manager_report, "manager_agent_name", None)  # type: ignore[arg-type]
+            company_name = _report_text(manager_report, "company_name", None)  # type: ignore[arg-type]
+            task_summary = _report_text(manager_report, "task_summary", work_order.objective)
+            db.execute(
+                """
+                INSERT INTO agent_workflow_memory (
+                  workflow_id,
+                  work_order_id,
+                  manager_agent_id,
+                  manager_agent_name,
+                  company_name,
+                  task_summary,
+                  payload,
+                  created_at,
+                  updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workflow_id) DO UPDATE SET
+                  work_order_id = excluded.work_order_id,
+                  manager_agent_id = excluded.manager_agent_id,
+                  manager_agent_name = excluded.manager_agent_name,
+                  company_name = excluded.company_name,
+                  task_summary = excluded.task_summary,
+                  payload = excluded.payload,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    request.workflowId,
+                    work_order_id,
+                    manager_agent_id,
+                    manager_agent_name,
+                    company_name,
+                    task_summary,
+                    dumps_dict(manager_report),
+                    report_created_at,
+                    timestamp,
+                ),
+            )
+            memory_stored = True
+
         if sync_changed:
             add_event(db, work_order_id, "workflow_synced", f"Workflow snapshot synced: {request.workflowId} ({workflow_status}).")
 
@@ -892,6 +1009,7 @@ def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequ
         tasks=task_snapshots,
         activityLogsStored=len(log_snapshots),
         finalOutputStored=request.finalOutput is not None and request.outputType is not None,
+        memoryStored=memory_stored,
     )
 
 

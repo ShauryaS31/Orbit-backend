@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 
+import { uploadPublicAsset } from "@/lib/services/supabase-storage";
 import type { BrandKit, VisualIdentity } from "@/lib/types/orbit";
 
 const DEFAULT_VISUAL_VIBE = "clean editorial abstraction with soft lighting";
@@ -54,7 +56,8 @@ export async function generateBrandBackground(
   const image = result.data?.[0];
   const imageUrl = image?.url;
   if (imageUrl) {
-    return { image_url: imageUrl, full_prompt: fullPrompt };
+    const savedUrl = await saveRemoteImage(imageUrl);
+    return { image_url: savedUrl, full_prompt: fullPrompt };
   }
 
   if (image?.b64_json) {
@@ -70,13 +73,41 @@ export async function generateBrandBackground(
 }
 
 async function saveGeneratedImage(base64Image: string): Promise<string> {
+  return saveImageBuffer(Buffer.from(base64Image, "base64"));
+}
+
+async function saveRemoteImage(imageUrl: string): Promise<string> {
+  const response = await fetch(imageUrl);
+  if (!response.ok) {
+    throw new Error(`Unable to download generated image from OpenAI: ${response.status}`);
+  }
+  return saveImageBuffer(Buffer.from(await response.arrayBuffer()));
+}
+
+async function saveImageBuffer(sourceBuffer: Buffer): Promise<string> {
   const outputDir = path.join(process.cwd(), "public", "generated-images");
-  const filename = `${crypto.randomUUID()}.png`;
+  const filename = `${crypto.randomUUID()}.jpg`;
+  const jpegBuffer = await sharp(sourceBuffer)
+    .resize(1080, 1080, { fit: "cover", position: "center" })
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toBuffer();
 
   await mkdir(outputDir, { recursive: true });
-  await writeFile(path.join(outputDir, filename), Buffer.from(base64Image, "base64"));
+  await writeFile(path.join(outputDir, filename), jpegBuffer);
 
-  return `/generated-images/${filename}`;
+  try {
+    return await uploadPublicAsset({
+      buffer: jpegBuffer,
+      objectPath: `generated-images/${filename}`,
+      contentType: "image/jpeg",
+    });
+  } catch (error) {
+    console.warn(
+      "[Visual Agent]: Supabase upload failed; falling back to local generated asset.",
+      error instanceof Error ? error.message : error,
+    );
+    return `/generated-images/${filename}`;
+  }
 }
 
 function parseImageSize(value?: string): "1536x1024" | "auto" | "1024x1024" | "1024x1536" {

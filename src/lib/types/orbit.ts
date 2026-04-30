@@ -445,6 +445,35 @@ export interface ManagerWorkflowStep {
   completion_signals?: ManagerWorkflowCompletionSignals;
 }
 
+export interface ManagerSummaryReportOutput {
+  draft_id: string;
+  title: string;
+  channel: string;
+  assigned_agent_id: string;
+  assigned_agent_name: string;
+  decision: "approve" | "revise" | "blocked" | "pending";
+  score?: number;
+  output_summary: string;
+  manager_review_summary: string;
+}
+
+export interface ManagerSummaryReport {
+  schema_version: "manager_summary_report.v1";
+  generated_at: string;
+  workflow_id: string;
+  work_order_id?: string;
+  manager_agent_id: string;
+  manager_agent_name: string;
+  company_name: string;
+  task_summary: string;
+  delegation_summary: string;
+  sub_agent_return_summary: string;
+  manager_review_summary: string;
+  final_status_summary: string;
+  outputs: ManagerSummaryReportOutput[];
+  source_log_ids: string[];
+}
+
 export interface CampaignEmailDraft {
   meta: DraftMetadata;
   type: "email";
@@ -556,6 +585,8 @@ export interface WorkflowState {
   selected_skills?: string[];
   /** Manager-authored plan for UI workflow progress. */
   manager_workflow_steps?: ManagerWorkflowStep[];
+  /** Manager-authored durable memory summary for Consultant Mode and operator review. */
+  manager_summary_report?: ManagerSummaryReport;
   /** Optional structured warm cache used in demo mode for known company profiles. */
   lyra_warm_intelligence?: LyraWarmIntelligence;
   /** When true, campaign generation runs-design-first expert carousel (10 slides) instead of generalist 7-day mix. */

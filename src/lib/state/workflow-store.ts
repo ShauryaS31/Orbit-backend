@@ -33,13 +33,12 @@ class WorkflowStore {
   }
 
   getWorkflow(id: string): WorkflowState | undefined {
-    if (!this.workflows.has(id)) {
-      this.loadFromDisk();
-    }
+    this.loadFromDisk();
     return this.workflows.get(id);
   }
 
   updateWorkflow(id: string, partialState: WorkflowStatePatch): WorkflowState | undefined {
+    this.loadFromDisk();
     const existing = this.workflows.get(id);
     if (!existing) {
       return undefined;
@@ -57,6 +56,7 @@ class WorkflowStore {
   }
 
   addLog(id: string, log: Omit<ActivityLog, "id" | "created_at" | "workflow_id">): ActivityLog | undefined {
+    this.loadFromDisk();
     const existing = this.workflows.get(id);
     if (!existing) {
       return undefined;
@@ -81,6 +81,7 @@ class WorkflowStore {
   }
 
   getDraft(workflowId: string, draftId: string): CampaignExecutionDraft | undefined {
+    this.loadFromDisk();
     const workflow = this.workflows.get(workflowId);
     return workflow?.campaign_execution_drafts.find((draft) => draft.meta.id === draftId);
   }
@@ -90,6 +91,7 @@ class WorkflowStore {
     draftId: string,
     updater: (draft: CampaignExecutionDraft) => CampaignExecutionDraft,
   ): CampaignExecutionDraft | undefined {
+    this.loadFromDisk();
     const existing = this.workflows.get(workflowId);
     if (!existing) {
       return undefined;

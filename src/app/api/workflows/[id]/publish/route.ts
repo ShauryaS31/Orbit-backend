@@ -4,7 +4,6 @@ import { getDraftPlainText } from "@/lib/agents/draft-utils";
 import type { SchedulePostResult } from "@/lib/services/social-orchestrator";
 import {
   createSandboxSchedulePostResult,
-  isAyrshareProductionBlocked,
   schedulePost,
 } from "@/lib/services/social-orchestrator";
 import { resolveAbsoluteAssetUrl } from "@/lib/services/public-assets";
@@ -124,16 +123,6 @@ export async function POST(request: Request, context: RouteParams) {
 
   const content = getDraftPlainText(draft);
   const imageUrl = resolveDraftImageUrl(workflow, draft);
-
-  if (!sandbox && isAyrshareProductionBlocked()) {
-    return NextResponse.json(
-      {
-        error:
-          "AYRSHARE_API_KEY is required when SOCIAL_SANDBOX is not enabled.",
-      },
-      { status: 503 },
-    );
-  }
 
   workflowStore.addLog(params.id, {
     role: "orchestrator",

@@ -36,6 +36,7 @@ interface StartWorkflowRequestBody {
   success_metric?: string;
   brand_learning_notes?: string[];
   agent_roster?: MarketingAgentRosterItem[];
+  defer_execution?: boolean;
 }
 
 export async function POST(request: Request) {
@@ -123,7 +124,9 @@ export async function POST(request: Request) {
       step_id: "request_received",
       message: "[Scott]: Work order received - Nova's company memory is staged.",
     });
-    runWorkflowInBackground(workflowId);
+    if (!body.defer_execution) {
+      runWorkflowInBackground(workflowId);
+    }
     return NextResponse.json({ workflow_id: workflowId, status: "started" });
   }
 
@@ -185,7 +188,9 @@ export async function POST(request: Request) {
       message: "[Nova]: Discovery complete - Scott can execute the work order now.",
     });
 
-    runWorkflowInBackground(workflowId);
+    if (!body.defer_execution) {
+      runWorkflowInBackground(workflowId);
+    }
   } catch (error) {
     workflowStore.updateWorkflow(workflowId, {
       status: "failed",
