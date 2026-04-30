@@ -9,8 +9,13 @@ import { appendGovernanceLog, createGovernanceEntry } from "@/lib/services/gover
 import { SKILL_IDS } from "@/lib/services/skill-catalog";
 import { generateBrandBackground } from "@/lib/services/image-generator";
 import { runTrendScout } from "@/lib/services/trend-scout";
+import { runDynamicMarketingWorkOrder } from "@/lib/services/dynamic-marketing-workflow";
 import { workflowStore } from "@/lib/state/workflow-store";
 import type { CampaignExecutionDraft, GeneratedCampaignAsset } from "@/lib/types/orbit";
+
+export async function runMarketingWorkOrder(workflowId: string): Promise<void> {
+  await runDynamicMarketingWorkOrder(workflowId);
+}
 
 export async function runCampaignGeneration(workflowId: string): Promise<void> {
   let workflow = workflowStore.getWorkflow(workflowId);
@@ -274,6 +279,28 @@ export async function runCampaignGeneration(workflowId: string): Promise<void> {
       enrichCarouselDraftWithStudioExport(designSystem, draft)
     : draft,
   );
+
+  workflowStore.updateWorkflow(workflowId, {
+    status: "running",
+    campaign_execution_drafts: draftsWithStudio,
+    design_studio_exports: designStudioExports,
+    selected_skills: managerOutput.selected_skills,
+    manager_workflow_steps: managerOutput.workflow_steps,
+    manager_content_reviews: managerOutput.manager_content_reviews,
+    manager_critiques: managerOutput.manager_critiques,
+  });
+
+  workflowStore.addLog(workflowId, {
+    role: "content_specialist",
+    step_id: "campaign_draft_generated",
+    message: "[Nova]: Drafts are ready for Scott's manager review.",
+  });
+
+  workflowStore.addLog(workflowId, {
+    role: "marketing_manager",
+    step_id: "campaign_draft_generated",
+    message: "[Scott]: Manager review guardrail complete; approvals and critique notes are attached to the drafts.",
+  });
 
   const generatedAssets = await generateVisualAssets(workflowId, {
     companyName: workflow.website_intelligence.company_name,

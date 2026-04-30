@@ -194,6 +194,16 @@ export interface TrendScoutResult {
   error_summary?: string;
 }
 
+export interface MarketingWorkOrderRequest {
+  id?: string;
+  title?: string;
+  department?: "marketing";
+  manager_agent_id?: string;
+  output_type?: "campaign_package" | "customer_email" | string;
+  autonomy?: string;
+  approval_required?: boolean;
+}
+
 /** Audit trail entry for goal-driven orchestration and governance exports. */
 export interface GovernanceAuditEntry {
   agent_id: string;
@@ -508,6 +518,8 @@ export interface WorkflowState {
   status: WorkflowStatus;
   company_url: string;
   demo_mode: boolean;
+  /** Original operator work-order envelope; Scott infers execution steps from this and the objective. */
+  work_order?: MarketingWorkOrderRequest;
   /** North-star outcome for orchestration (e.g. investor meetings booked). */
   business_goal?: string;
   /** Measurable outcome the Manager drafts against (optional). */

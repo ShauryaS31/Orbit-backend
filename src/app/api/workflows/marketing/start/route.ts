@@ -8,7 +8,7 @@ import {
 } from "@/lib/data/lyra-brand-intelligence";
 import { findMockCompanyByUrl } from "@/lib/data/mock-companies";
 import { scrapeWebsiteIntelligence } from "@/lib/services/web-scraper";
-import { runCampaignGeneration } from "@/lib/services/workflow-execution";
+import { runMarketingWorkOrder } from "@/lib/services/workflow-execution";
 import { workflowStore } from "@/lib/state/workflow-store";
 import {
   NOVAS_RESEARCH_REPORT_TITLE,
@@ -21,6 +21,16 @@ interface StartWorkflowRequestBody {
   demo_mode?: boolean;
   /** Forces design-first 10-slide Instagram expert carousel instead of generalist 7-day mix. */
   carousel_maker?: boolean;
+  output_type?: string;
+  work_order?: {
+    id?: string;
+    title?: string;
+    department?: "marketing";
+    manager_agent_id?: string;
+    output_type?: string;
+    autonomy?: string;
+    approval_required?: boolean;
+  };
   business_goal?: string;
   success_metric?: string;
   brand_learning_notes?: string[];
@@ -38,6 +48,13 @@ export async function POST(request: Request) {
   const companyUrl = body.company_url?.trim();
   const demoMode = Boolean(body.demo_mode);
   const carouselMaker = Boolean(body.carousel_maker);
+  const workOrder =
+    body.work_order || body.output_type ?
+      {
+        ...(body.work_order ?? {}),
+        output_type: body.work_order?.output_type ?? body.output_type,
+      }
+    : undefined;
   const businessGoal = body.business_goal?.trim();
   const successMetric = body.success_metric?.trim();
   const brandLearningNotes =
@@ -78,6 +95,7 @@ export async function POST(request: Request) {
       status: "running",
       company_url: companyUrl,
       demo_mode: true,
+      ...(workOrder ? { work_order: workOrder } : {}),
       carousel_maker_mode: carouselMaker,
       ...(businessGoal ? { business_goal: businessGoal } : {}),
       ...(successMetric ? { success_metric: successMetric } : {}),
@@ -99,17 +117,18 @@ export async function POST(request: Request) {
     workflowStore.addLog(workflowId, {
       role: "marketing_manager",
       step_id: "request_received",
-      message: "[Scott]: Demo workflow received - Nova's cached discovery is staged.",
+      message: "[Scott]: Work order received - Nova's company memory is staged.",
     });
-    runCampaignGenerationInBackground(workflowId);
+    runWorkflowInBackground(workflowId);
     return NextResponse.json({ workflow_id: workflowId, status: "started" });
   }
 
   workflowStore.createWorkflow({
     id: workflowId,
-    status: "needs_validation",
+    status: "running",
     company_url: companyUrl,
     demo_mode: false,
+    ...(workOrder ? { work_order: workOrder } : {}),
     carousel_maker_mode: carouselMaker,
     ...(businessGoal ? { business_goal: businessGoal } : {}),
     ...(successMetric ? { success_metric: successMetric } : {}),
@@ -145,7 +164,7 @@ export async function POST(request: Request) {
       validationResult.inferred_visual_identity,
     );
     workflowStore.updateWorkflow(workflowId, {
-      status: "needs_validation",
+      status: "running",
       website_intelligence: scrapeResult.intelligence,
       intelligence_validation: validationResult.validation,
       brand_kit: fused.brand_kit,
@@ -158,9 +177,10 @@ export async function POST(request: Request) {
     workflowStore.addLog(workflowId, {
       role: "researcher",
       step_id: "validation_completed",
-      message:
-        `[Nova]: Discovery complete - review ${NOVAS_RESEARCH_REPORT_TITLE} before Scott runs strategy.`,
+      message: "[Nova]: Discovery complete - Scott can execute the work order now.",
     });
+
+    runWorkflowInBackground(workflowId);
   } catch (error) {
     workflowStore.updateWorkflow(workflowId, {
       status: "failed",
@@ -176,8 +196,8 @@ export async function POST(request: Request) {
   return NextResponse.json({ workflow_id: workflowId, status: "started" });
 }
 
-function runCampaignGenerationInBackground(workflowId: string): void {
-  void runCampaignGeneration(workflowId).catch((error) => {
+function runWorkflowInBackground(workflowId: string): void {
+  void runMarketingWorkOrder(workflowId).catch((error) => {
     workflowStore.updateWorkflow(workflowId, {
       status: "failed",
       error_message: (error as Error).message,
