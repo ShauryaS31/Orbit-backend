@@ -13,6 +13,8 @@ from app.models import (
     WorkOrderOutput,
     WorkOrderStatusPatch,
     WorkOrderWorkflowPatch,
+    WorkflowSnapshotSyncRequest,
+    WorkflowSnapshotSyncResponse,
 )
 from app.services.manager_plan import build_final_output, build_manager_plan
 
@@ -86,6 +88,14 @@ def get_final_output(work_order_id: str) -> WorkOrderOutput:
     if not output:
         raise HTTPException(status_code=404, detail="Final output not found")
     return output
+
+
+@router.post("/{work_order_id}/workflow-sync", response_model=WorkflowSnapshotSyncResponse)
+def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequest) -> WorkflowSnapshotSyncResponse:
+    synced = database.sync_workflow_snapshot(work_order_id, request)
+    if not synced:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    return synced
 
 
 @router.get("/{work_order_id}/events", response_model=list[WorkOrderEvent])

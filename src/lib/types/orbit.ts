@@ -81,9 +81,11 @@ export interface CardConfig {
 export type DraftStatus =
   | "pending_review"
   | "approved"
+  | "rejected"
   | "revision_requested"
   | "scheduled"
-  | "published";
+  | "published"
+  | "sent";
 
 export type ManagerContentIssueType =
   | "too_close_to_reference"
@@ -204,6 +206,16 @@ export interface MarketingWorkOrderRequest {
   approval_required?: boolean;
 }
 
+export interface MarketingAgentRosterItem {
+  id: string;
+  name: string;
+  role: "manager" | "employee";
+  model?: string;
+  tools?: string[];
+  autonomy?: number;
+  enabled?: boolean;
+}
+
 /** Audit trail entry for goal-driven orchestration and governance exports. */
 export interface GovernanceAuditEntry {
   agent_id: string;
@@ -221,6 +233,10 @@ export interface DraftMetadata {
   id: string;
   day: number;
   status: DraftStatus;
+  /** Human operator approval gate. Scott's QA can approve internally while this remains pending. */
+  operator_status?: "pending" | "approved" | "rejected";
+  operator_reviewed_at?: string;
+  operator_reviewer?: string;
   channel: "instagram" | "linkedin" | "email";
   original_prompt: string;
   /** How this draft ladders to `WorkflowState.success_metric` / business goals. */
@@ -261,6 +277,10 @@ export interface DraftMetadata {
   /** Target social platform used at publish time (may differ from draft channel during sandbox demos). */
   publish_platform?: "instagram" | "linkedin" | "facebook" | "tiktok";
   deployment_post_id?: string;
+  gmail_message_id?: string;
+  gmail_thread_id?: string;
+  sent_to?: string;
+  sent_at?: string;
   /** Manager content QA — does not replace human approve/regenerate APIs. */
   manager_review?: ManagerContentReview;
 
@@ -520,6 +540,8 @@ export interface WorkflowState {
   demo_mode: boolean;
   /** Original operator work-order envelope; Scott infers execution steps from this and the objective. */
   work_order?: MarketingWorkOrderRequest;
+  /** Operator-configured visible agent roster used for manager delegation. */
+  agent_roster?: MarketingAgentRosterItem[];
   /** North-star outcome for orchestration (e.g. investor meetings booked). */
   business_goal?: string;
   /** Measurable outcome the Manager drafts against (optional). */

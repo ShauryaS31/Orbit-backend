@@ -6,6 +6,7 @@ from app.models import (
     ContextBlock,
     ContextDocument,
     DepartmentContextLog,
+    MarketingAgentRosterItem,
     ManagerPlanPreviewResponse,
     MapPreset,
     OfficeMap,
@@ -150,6 +151,11 @@ INITIAL_WORK_ORDERS = [
             WorkOrderSubtask(id="wo-launch-001-copy", title="Copy calendar", owner="employee", agentId="leo", status="draft", summary="Leo drafts 7 posts, email beats, and CTA variants."),
             WorkOrderSubtask(id="wo-launch-001-visuals", title="Visual direction", owner="employee", agentId="iris", status="draft", summary="Iris creates visual prompts and asset direction for the strategy package."),
             WorkOrderSubtask(id="wo-launch-001-review", title="Manager review and assembly", owner="manager", agentId="scott", status="draft", summary="Scott reviews all outputs against Common and Marketing context before the final growth package."),
+        ],
+        agentRoster=[
+            MarketingAgentRosterItem(id="scott", name="Scott", role="manager", model="GPT-4o", tools=["Skill routing", "Draft review", "Governance", "Deployment"], autonomy=4),
+            MarketingAgentRosterItem(id="leo", name="Leo", role="employee", model="GPT-4o-mini", tools=["Copywriting", "Email drafting"], autonomy=3),
+            MarketingAgentRosterItem(id="iris", name="Iris", role="employee", model="GPT-4o-mini", tools=["Visual direction", "Asset prompts"], autonomy=3),
         ],
     )
 ]

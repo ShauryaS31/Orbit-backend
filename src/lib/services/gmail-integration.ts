@@ -1,5 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import {
+  resolveCredential,
+  resolveToken,
+  saveProviderCredentials,
+  saveProviderTokens,
+} from "@/lib/services/integration-store";
 
 type GoogleTokenResponse = {
   access_token?: string;
@@ -23,6 +27,11 @@ type SendGmailMessageInput = {
   text: string;
 };
 
+type GoogleClientConfigInput = {
+  clientId?: string;
+  clientSecret?: string;
+};
+
 const googleAuthBaseUrl = "https://accounts.google.com/o/oauth2/v2/auth";
 const googleTokenUrl = "https://oauth2.googleapis.com/token";
 const gmailSendUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
@@ -31,40 +40,21 @@ const gmailSendScope = "https://www.googleapis.com/auth/gmail.send";
 const runtimeTokens: RuntimeGoogleTokens = {};
 const validOAuthStates = new Set<string>();
 
-async function upsertLocalEnvValue(key: string, value: string) {
-  const envPath = path.join(process.cwd(), ".env.local");
-  let content = "";
-
-  try {
-    content = await readFile(envPath, "utf8");
-  } catch {
-    content = "";
-  }
-
-  const lines = content.split(/\r?\n/);
-  const keyPattern = new RegExp(`^${key}=`);
-  let updated = false;
-  const nextLines = lines.map((line) => {
-    if (!keyPattern.test(line)) return line;
-    updated = true;
-    return `${key}=${value}`;
-  });
-
-  if (!updated) {
-    const trimmedTrailingEmptyLines = nextLines.join("\n").replace(/\n*$/, "");
-    await writeFile(envPath, `${trimmedTrailingEmptyLines}\n${key}=${value}\n`, "utf8");
-    return;
-  }
-
-  await writeFile(envPath, `${nextLines.join("\n").replace(/\n*$/, "")}\n`, "utf8");
-}
-
 function configuredRedirectUri() {
-  return process.env.GOOGLE_REDIRECT_URI ?? "http://localhost:3000/api/integrations/google/callback";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  return process.env.GOOGLE_REDIRECT_URI ?? (appUrl ? `${appUrl}/api/integrations/google/callback` : "http://localhost:3000/api/integrations/google/callback");
 }
 
-function configuredRefreshToken() {
-  return runtimeTokens.refreshToken ?? process.env.GOOGLE_REFRESH_TOKEN ?? process.env.GMAIL_REFRESH_TOKEN;
+async function configuredRefreshToken() {
+  return runtimeTokens.refreshToken ?? await resolveToken("google", "refreshToken", ["GOOGLE_REFRESH_TOKEN", "GMAIL_REFRESH_TOKEN"]);
+}
+
+async function googleClientId() {
+  return resolveCredential("google", "clientId", ["GOOGLE_CLIENT_ID"]);
+}
+
+async function googleClientSecret() {
+  return resolveCredential("google", "clientSecret", ["GOOGLE_CLIENT_SECRET"]);
 }
 
 function base64UrlEncode(value: string) {
@@ -75,14 +65,14 @@ function base64UrlEncode(value: string) {
     .replace(/=+$/g, "");
 }
 
-function assertGoogleClientConfigured() {
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+async function assertGoogleClientConfigured() {
+  if (!await googleClientId() || !await googleClientSecret()) {
     throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured.");
   }
 }
 
-function assertGoogleConnected() {
-  const refreshToken = configuredRefreshToken();
+async function assertGoogleConnected() {
+  const refreshToken = await configuredRefreshToken();
   if (!refreshToken && !runtimeTokens.accessToken) {
     throw new Error("Gmail is not connected yet. Visit /api/integrations/google/start first, or set GOOGLE_REFRESH_TOKEN.");
   }
@@ -105,27 +95,54 @@ async function requestGoogleToken(body: URLSearchParams) {
   return payload;
 }
 
-export function getGoogleIntegrationStatus() {
-  const refreshToken = configuredRefreshToken();
+export async function getGoogleIntegrationStatus() {
+  const refreshToken = await configuredRefreshToken();
+  const hasClientId = Boolean(await googleClientId());
+  const hasClientSecret = Boolean(await googleClientSecret());
+  const hasEnvRefreshToken = Boolean(process.env.GOOGLE_REFRESH_TOKEN ?? process.env.GMAIL_REFRESH_TOKEN);
+  const hasStoredRefreshToken = Boolean(await resolveToken("google", "refreshToken"));
   return {
-    configured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    configured: hasClientId && hasClientSecret,
     redirectUri: configuredRedirectUri(),
     scope: gmailSendScope,
     connected: Boolean(refreshToken || runtimeTokens.accessToken),
-    hasEnvRefreshToken: Boolean(process.env.GOOGLE_REFRESH_TOKEN ?? process.env.GMAIL_REFRESH_TOKEN),
+    hasClientId,
+    hasClientSecret,
+    hasEnvRefreshToken,
+    hasStoredRefreshToken,
     hasRuntimeRefreshToken: Boolean(runtimeTokens.refreshToken),
     hasAccessToken: Boolean(runtimeTokens.accessToken && (!runtimeTokens.expiresAt || runtimeTokens.expiresAt > Date.now())),
     testRecipientConfigured: Boolean(process.env.GOOGLE_TEST_RECIPIENT ?? process.env.GMAIL_TEST_TO),
+    tokenSourceLabel: runtimeTokens.refreshToken
+      ? "Runtime token"
+      : hasStoredRefreshToken
+        ? "Backend store"
+        : hasEnvRefreshToken
+          ? "Environment"
+          : "No refresh token",
   };
 }
 
-export function createGoogleAuthUrl() {
-  assertGoogleClientConfigured();
+export async function saveGoogleClientConfig(input: GoogleClientConfigInput) {
+  const clientId = input.clientId?.trim();
+  const clientSecret = input.clientSecret?.trim();
+
+  await saveProviderCredentials("google", {
+    clientId,
+    clientSecret,
+  });
+
+  return getGoogleIntegrationStatus();
+}
+
+export async function createGoogleAuthUrl() {
+  await assertGoogleClientConfigured();
 
   const state = crypto.randomUUID();
   validOAuthStates.add(state);
+  const clientId = await googleClientId();
   const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID!,
+    client_id: clientId!,
     redirect_uri: configuredRedirectUri(),
     response_type: "code",
     scope: gmailSendScope,
@@ -139,7 +156,9 @@ export function createGoogleAuthUrl() {
 }
 
 export async function exchangeGoogleCode(code: string, state?: string | null) {
-  assertGoogleClientConfigured();
+  await assertGoogleClientConfigured();
+  const clientId = await googleClientId();
+  const clientSecret = await googleClientSecret();
 
   const strictState = process.env.GOOGLE_OAUTH_STRICT_STATE === "true" || process.env.NODE_ENV === "production";
   if (strictState && state && !validOAuthStates.has(state)) {
@@ -150,8 +169,8 @@ export async function exchangeGoogleCode(code: string, state?: string | null) {
   const payload = await requestGoogleToken(
     new URLSearchParams({
       code,
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      client_id: clientId!,
+      client_secret: clientSecret!,
       redirect_uri: configuredRedirectUri(),
       grant_type: "authorization_code",
     }),
@@ -162,7 +181,7 @@ export async function exchangeGoogleCode(code: string, state?: string | null) {
   runtimeTokens.expiresAt = payload.expires_in ? Date.now() + payload.expires_in * 1000 - 60_000 : undefined;
 
   if (payload.refresh_token) {
-    await upsertLocalEnvValue("GOOGLE_REFRESH_TOKEN", payload.refresh_token);
+    await saveProviderTokens("google", { refreshToken: payload.refresh_token });
   }
 
   return {
@@ -174,14 +193,16 @@ export async function exchangeGoogleCode(code: string, state?: string | null) {
 }
 
 async function getGmailAccessToken() {
-  assertGoogleClientConfigured();
-  assertGoogleConnected();
+  await assertGoogleClientConfigured();
+  await assertGoogleConnected();
+  const clientId = await googleClientId();
+  const clientSecret = await googleClientSecret();
 
   if (runtimeTokens.accessToken && (!runtimeTokens.expiresAt || runtimeTokens.expiresAt > Date.now())) {
     return runtimeTokens.accessToken;
   }
 
-  const refreshToken = configuredRefreshToken();
+  const refreshToken = await configuredRefreshToken();
   if (!refreshToken) {
     throw new Error("No Google refresh token available.");
   }
@@ -189,8 +210,8 @@ async function getGmailAccessToken() {
   const payload = await requestGoogleToken(
     new URLSearchParams({
       refresh_token: refreshToken,
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      client_id: clientId!,
+      client_secret: clientSecret!,
       grant_type: "refresh_token",
     }),
   );

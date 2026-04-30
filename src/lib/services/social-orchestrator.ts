@@ -1,3 +1,5 @@
+import { publishInstagramImagePost } from "@/lib/services/instagram-publishing";
+
 export interface SchedulePostOptions {
   /** When true, include `scheduleDate` for Ayrshare (request included `schedule_time`). */
   explicitSchedule?: boolean;
@@ -141,6 +143,43 @@ export async function schedulePost(
   }
 
   const apiKey = process.env.AYRSHARE_API_KEY?.trim();
+  const explicitSchedule = options?.explicitSchedule === true;
+
+  if (platform === "instagram") {
+    const isFutureScheduled = scheduledDate.getTime() > Date.now() + 2000;
+    if (explicitSchedule && isFutureScheduled && !apiKey) {
+      throw new Error(
+        "Direct Instagram publishing does not support future scheduling. Add AYRSHARE_API_KEY for scheduled social posts, or publish immediately.",
+      );
+    }
+
+    try {
+      const [mediaUrl] = resolveMediaUrlsForPlatform(platform, imageUrl) ?? [];
+      if (!mediaUrl) {
+        throw new Error("Instagram requires a publicly reachable HTTPS media URL.");
+      }
+      const result = await publishInstagramImagePost({
+        mediaUrl,
+        caption: content,
+      });
+
+      return {
+        success: true,
+        deployment_post_id: result.postId,
+        scheduled_at: result.publishedAt,
+        message: `Posted directly to Instagram${result.instagramUsername ? ` @${result.instagramUsername}` : ""}.`,
+      };
+    } catch (error) {
+      if (!apiKey) {
+        throw error;
+      }
+      console.warn(
+        "[Social Orchestrator]: Direct Instagram publish failed; falling back to Ayrshare:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
   if (!apiKey) {
     console.warn(AYRSHARE_API_KEY_REMINDER);
     throw new Error(
@@ -166,7 +205,6 @@ export async function schedulePost(
     body.mediaUrls = mediaUrls;
   }
 
-  const explicitSchedule = options?.explicitSchedule === true;
   if (explicitSchedule) {
     body.scheduleDate = formatScheduleDateUtc(scheduledDate);
   }

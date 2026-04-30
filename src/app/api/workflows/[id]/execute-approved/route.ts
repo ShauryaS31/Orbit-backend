@@ -7,6 +7,7 @@ import {
   isAyrshareProductionBlocked,
   schedulePost,
 } from "@/lib/services/social-orchestrator";
+import { resolveAbsoluteAssetUrl } from "@/lib/services/public-assets";
 import type { CampaignExecutionDraft } from "@/lib/types/orbit";
 import { workflowStore } from "@/lib/state/workflow-store";
 
@@ -21,13 +22,6 @@ type PublishPlatform = "instagram" | "linkedin" | "facebook" | "tiktok";
 interface ExecuteApprovedBody {
   schedule_time?: string;
   platforms?: Partial<Record<string, PublishPlatform>>;
-}
-
-function resolveAbsoluteAssetUrl(urlOrPath: string): string {
-  if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) return urlOrPath;
-  const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "http://localhost:3000";
-  const path = urlOrPath.startsWith("/") ? urlOrPath : `/${urlOrPath}`;
-  return `${base}${path}`;
 }
 
 function resolveDraftImageUrl(
@@ -49,6 +43,7 @@ function isExecutableDraft(draft: CampaignExecutionDraft): boolean {
   return (
     draft.type !== "email" &&
     draft.meta.status === "approved" &&
+    draft.meta.operator_status === "approved" &&
     !draft.meta.deployment_post_id
   );
 }
@@ -76,7 +71,11 @@ export async function POST(request: Request, context: RouteParams) {
           draft_id: draft.meta.id,
           type: draft.type,
           status: draft.meta.status,
-          reason: draft.type === "email" ? "email_not_social_publish_target" : "not_approved_or_already_deployed",
+          operator_status: draft.meta.operator_status ?? "pending",
+          reason:
+            draft.type === "email" ? "email_not_social_publish_target"
+            : draft.meta.operator_status !== "approved" ? "operator_approval_required"
+            : "not_approved_or_already_deployed",
         })),
       },
       { status: 400 },

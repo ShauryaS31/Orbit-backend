@@ -8,6 +8,7 @@ import type {
   CampaignCarouselSlide,
   CampaignExecutionDraft,
   CampaignLinkedInPostDraft,
+  MarketingAgentRosterItem,
   ManagerContentReview,
   ManagerCritique,
   ManagerCritiqueReasonCode,
@@ -19,9 +20,22 @@ import type {
 
 const AGENT_MODEL = resolveAgentModel();
 const MAX_REVISIONS = 3;
+const LLM_REQUEST_TIMEOUT_MS = resolvePositiveInteger(process.env.OPENAI_AGENT_TIMEOUT_MS, 45_000);
+const PLAN_MAX_TOKENS = resolvePositiveInteger(process.env.OPENAI_AGENT_PLAN_MAX_TOKENS, 1_400);
+const DRAFT_MAX_TOKENS = resolvePositiveInteger(process.env.OPENAI_AGENT_DRAFT_MAX_TOKENS, 1_800);
+const REVIEW_MAX_TOKENS = resolvePositiveInteger(process.env.OPENAI_AGENT_REVIEW_MAX_TOKENS, 900);
 
-type DynamicStepOwner = "scott" | "nova";
+type DynamicStepOwner = string;
 type DynamicDeliverableKind = "email" | "linkedin_post" | "instagram_caption" | "strategy_brief" | "generic_marketing_asset";
+
+interface RuntimeAgent {
+  id: string;
+  name: string;
+  role: "manager" | "employee";
+  model?: string;
+  tools: string[];
+  autonomy?: number;
+}
 
 interface DynamicPlanStep {
   id: string;
@@ -39,6 +53,7 @@ interface DynamicDeliverable {
   channel: "email" | "linkedin" | "instagram" | "strategy" | "general";
   title: string;
   schedule_day?: number;
+  owner_agent_id?: string;
   instructions: string;
   acceptance_criteria: string[];
 }
@@ -76,6 +91,12 @@ interface ScottReview {
   }>;
 }
 
+function resolvePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.round(parsed);
+}
+
 function resolveAgentModel(): string {
   const configured = process.env.OPENAI_AGENT_MODEL ?? process.env.OPENAI_TEXT_MODEL ?? process.env.OPENAI_MODEL;
   if (configured && !configured.toLowerCase().includes("image")) return configured;
@@ -99,14 +120,65 @@ function parseJsonObject<T>(raw: string | null | undefined, label: string): T {
   }
 }
 
+function normalizeOpenAIError(error: unknown, label: string): Error {
+  if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return new Error(`${label} timed out after ${Math.round(LLM_REQUEST_TIMEOUT_MS / 1000)}s.`);
+    }
+    return error;
+  }
+  return new Error(`${label} failed.`);
+}
+
+async function createJsonChatCompletion(args: {
+  label: string;
+  temperature: number;
+  maxTokens: number;
+  messages: OpenAI.Chat.ChatCompletionMessageParam[];
+}): Promise<string | null | undefined> {
+  const client = getClient();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LLM_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await client.chat.completions.create(
+      {
+        model: AGENT_MODEL,
+        temperature: args.temperature,
+        max_tokens: args.maxTokens,
+        response_format: { type: "json_object" },
+        messages: args.messages,
+      },
+      {
+        signal: controller.signal,
+        timeout: LLM_REQUEST_TIMEOUT_MS,
+      },
+    );
+    return response.choices[0]?.message?.content;
+  } catch (error) {
+    throw normalizeOpenAIError(error, args.label);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function compactWorkflowContext(workflow: WorkflowState) {
   const intelligence = workflow.website_intelligence;
   const context = workflow.product_marketing_context;
+  const roster = resolveAgentRoster(workflow);
   return {
     work_order: workflow.work_order ?? null,
     objective: workflow.business_goal ?? "",
     success_metric: workflow.success_metric ?? "",
     brand_learning_notes: workflow.brand_learning_notes ?? [],
+    agent_roster: roster.all.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      role: agent.role,
+      tools: agent.tools,
+      autonomy: agent.autonomy,
+      model: agent.model,
+    })),
     company: {
       name: intelligence?.company_name ?? "Unknown company",
       url: workflow.company_url,
@@ -122,17 +194,101 @@ function compactWorkflowContext(workflow: WorkflowState) {
   };
 }
 
+function normalizeRosterItem(agent: MarketingAgentRosterItem): RuntimeAgent | null {
+  const id = agent.id.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+  const name = agent.name.trim();
+  if (!id || !name || agent.enabled === false) return null;
+
+  return {
+    id,
+    name,
+    role: agent.role,
+    model: agent.model,
+    tools: Array.isArray(agent.tools) ? agent.tools.filter(Boolean) : [],
+    autonomy: agent.autonomy,
+  };
+}
+
+function resolveAgentRoster(workflow: WorkflowState) {
+  const configured = (workflow.agent_roster ?? [])
+    .map(normalizeRosterItem)
+    .filter((agent): agent is RuntimeAgent => Boolean(agent));
+
+  const managerId = workflow.work_order?.manager_agent_id ?? "scott";
+  const manager =
+    configured.find((agent) => agent.role === "manager" && agent.id === managerId) ??
+    configured.find((agent) => agent.role === "manager") ??
+    {
+      id: "scott",
+      name: "Scott",
+      role: "manager" as const,
+      model: AGENT_MODEL,
+      tools: ["strategy", "delegation", "review"],
+      autonomy: 4,
+    };
+
+  const employees = configured.filter((agent) => agent.role === "employee");
+  const resolvedEmployees = employees.length
+    ? employees
+    : [
+        {
+          id: "nova",
+          name: "Nova",
+          role: "employee" as const,
+          model: AGENT_MODEL,
+          tools: ["research", "copy", "execution"],
+          autonomy: 3,
+        },
+      ];
+
+  const all = [manager, ...resolvedEmployees.filter((agent) => agent.id !== manager.id)];
+  const byId = new Map(all.map((agent) => [agent.id, agent]));
+
+  return {
+    manager,
+    employees: resolvedEmployees,
+    all,
+    byId,
+    ownerIds: all.map((agent) => agent.id),
+    employeeIds: resolvedEmployees.map((agent) => agent.id),
+  };
+}
+
+function agentDisplayName(roster: ReturnType<typeof resolveAgentRoster>, agentId: string): string {
+  return roster.byId.get(agentId)?.name ?? agentId;
+}
+
+function normalizeOwnerId(value: string | undefined, roster: ReturnType<typeof resolveAgentRoster>, fallback: RuntimeAgent): string {
+  const id = String(value ?? "").trim().toLowerCase();
+  return roster.byId.has(id) ? id : fallback.id;
+}
+
+function employeeForDeliverable(
+  deliverable: DynamicDeliverable,
+  deliverableIndex: number,
+  roster: ReturnType<typeof resolveAgentRoster>,
+): RuntimeAgent {
+  const preferredId = String(deliverable.owner_agent_id ?? "").trim().toLowerCase();
+  const preferred = roster.employees.find((agent) => agent.id === preferredId);
+  if (preferred) return preferred;
+  return roster.employees[deliverableIndex % roster.employees.length] ?? roster.employees[0];
+}
+
 async function askScottForPlan(workflow: WorkflowState): Promise<ScottPlan> {
-  const client = getClient();
-  const response = await client.chat.completions.create({
-    model: AGENT_MODEL,
+  const roster = resolveAgentRoster(workflow);
+  const ownerList = roster.all
+    .map((agent) => `${agent.id} (${agent.name}, ${agent.role}, tools: ${agent.tools.join(", ") || "general"})`)
+    .join("; ");
+  const employeeList = roster.employees.map((agent) => agent.id).join(", ");
+  const content = await createJsonChatCompletion({
+    label: "Scott planning",
     temperature: 0.25,
-    response_format: { type: "json_object" },
+    maxTokens: PLAN_MAX_TOKENS,
     messages: [
       {
         role: "system",
         content:
-          "You are Scott, Orbit's marketing manager agent. Read the operator work order and company knowledge base. Decide the execution plan yourself. Return strict JSON only with keys: plan_summary, reasoning, steps, deliverables, final_review_checklist. Steps must be an ordered array of 3-7 steps with id, label, owner (scott|nova), summary, expected_output, depends_on, completion_signal. Deliverables must be the concrete marketing outputs Nova should produce, with id, kind (email|linkedin_post|instagram_caption|strategy_brief|generic_marketing_asset), channel, title, schedule_day, instructions, acceptance_criteria. schedule_day must be a positive integer only when the work order asks for a campaign, multi-day sequence, or dated publishing plan; distribute multiple same-channel deliverables across different days unless the work order explicitly asks for multiple posts on the same day. Do not create a 7-day campaign unless the work order actually asks for a campaign or multi-day package. If the user asks for one email, plan one email.",
+          `You are ${roster.manager.name}, Orbit's marketing manager agent. Read the operator work order, company knowledge base, and available agent roster. Decide the execution plan yourself. Return strict JSON only with keys: plan_summary, reasoning, steps, deliverables, final_review_checklist. Available agent owners are: ${ownerList}. Steps must be an ordered array of 3-7 steps with id, label, owner, summary, expected_output, depends_on, completion_signal. Every step owner must be one of these exact ids: ${roster.ownerIds.join(", ")}. Deliverables must be the concrete marketing outputs employee agents should produce, with id, kind (email|linkedin_post|instagram_caption|strategy_brief|generic_marketing_asset), channel, title, owner_agent_id, schedule_day, instructions, acceptance_criteria. Every deliverable owner_agent_id must be one of these employee ids: ${employeeList}. Use multiple employee agents when the roster has more than one and the work can be split naturally. schedule_day must be a positive integer only when the work order asks for a campaign, multi-day sequence, or dated publishing plan; distribute multiple same-channel deliverables across different days unless the work order explicitly asks for multiple posts on the same day. Do not create a 7-day campaign unless the work order actually asks for a campaign or multi-day package. If the user asks for one email, plan one email.`,
       },
       {
         role: "user",
@@ -141,33 +297,43 @@ async function askScottForPlan(workflow: WorkflowState): Promise<ScottPlan> {
     ],
   });
 
-  const parsed = parseJsonObject<ScottPlan>(response.choices[0]?.message?.content, "Scott plan");
+  const parsed = parseJsonObject<ScottPlan>(content, "Scott plan");
   if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) {
     throw new Error("Scott plan did not include executable steps.");
   }
   if (!Array.isArray(parsed.deliverables) || parsed.deliverables.length === 0) {
-    throw new Error("Scott plan did not include deliverables for Nova.");
+    throw new Error("Scott plan did not include deliverables for employee agents.");
   }
-  return parsed;
+  return {
+    ...parsed,
+    steps: parsed.steps.map((step) => ({
+      ...step,
+      owner: normalizeOwnerId(step.owner, roster, /draft|write|create|compose|produce/i.test(`${step.label} ${step.summary}`) ? roster.employees[0] : roster.manager),
+    })),
+    deliverables: parsed.deliverables.map((deliverable, index) => ({
+      ...deliverable,
+      owner_agent_id: employeeForDeliverable(deliverable, index, roster).id,
+    })),
+  };
 }
 
-async function askNovaToExecute(args: {
+async function askEmployeeToExecute(args: {
   workflow: WorkflowState;
   plan: ScottPlan;
   deliverable: DynamicDeliverable;
+  assignee: RuntimeAgent;
   revision?: ScottReview;
   previousOutput?: NovaOutput;
 }): Promise<NovaOutput> {
-  const client = getClient();
-  const response = await client.chat.completions.create({
-    model: AGENT_MODEL,
+  const content = await createJsonChatCompletion({
+    label: `${args.assignee.name} execution`,
     temperature: args.revision ? 0.35 : 0.45,
-    response_format: { type: "json_object" },
+    maxTokens: DRAFT_MAX_TOKENS,
     messages: [
       {
         role: "system",
         content:
-          "You are Nova, Orbit's marketing sub-agent. Execute only the deliverable Scott assigned. Use the knowledge base as evidence, never as copy-paste source text. Return strict JSON with keys: deliverable_id, kind, title, subject_line, preview_text, body, proof_point, call_to_action, source_anchors, notes. For email, body must be a complete send-ready email body with greeting and signoff. Avoid generic phrases such as unlock, revolutionize, game-changing, empower, streamline, cutting-edge, and in today's fast-paced. For other channels, body must be the final publishable draft.",
+          `You are ${args.assignee.name}, one of Orbit's marketing sub-agents. Execute only the deliverable the manager assigned to you. Your configured tools are: ${args.assignee.tools.join(", ") || "general marketing execution"}. Use the knowledge base as evidence, never as copy-paste source text. Return strict JSON with keys: deliverable_id, kind, title, subject_line, preview_text, body, proof_point, call_to_action, source_anchors, notes. For email, body must be a complete send-ready email body with greeting and signoff. Avoid generic phrases such as unlock, revolutionize, game-changing, empower, streamline, cutting-edge, and in today's fast-paced. For other channels, body must be the final publishable draft.`,
       },
       {
         role: "user",
@@ -175,6 +341,7 @@ async function askNovaToExecute(args: {
           workflow_context: compactWorkflowContext(args.workflow),
           scott_plan: args.plan,
           assigned_deliverable: args.deliverable,
+          assignee: args.assignee,
           revision_request: args.revision ?? null,
           previous_output: args.previousOutput ?? null,
         }),
@@ -182,9 +349,9 @@ async function askNovaToExecute(args: {
     ],
   });
 
-  const parsed = parseJsonObject<NovaOutput>(response.choices[0]?.message?.content, "Nova output");
-  if (!parsed.body?.trim()) throw new Error("Nova output did not include body text.");
-  if (!parsed.call_to_action?.trim()) throw new Error("Nova output did not include a call_to_action.");
+  const parsed = parseJsonObject<NovaOutput>(content, `${args.assignee.name} output`);
+  if (!parsed.body?.trim()) throw new Error(`${args.assignee.name} output did not include body text.`);
+  if (!parsed.call_to_action?.trim()) throw new Error(`${args.assignee.name} output did not include a call_to_action.`);
   return {
     ...parsed,
     deliverable_id: parsed.deliverable_id || args.deliverable.id,
@@ -198,18 +365,18 @@ async function askScottToReview(args: {
   workflow: WorkflowState;
   plan: ScottPlan;
   deliverable: DynamicDeliverable;
+  assignee: RuntimeAgent;
   output: NovaOutput;
 }): Promise<ScottReview> {
-  const client = getClient();
-  const response = await client.chat.completions.create({
-    model: AGENT_MODEL,
+  const content = await createJsonChatCompletion({
+    label: "Scott review",
     temperature: 0.15,
-    response_format: { type: "json_object" },
+    maxTokens: REVIEW_MAX_TOKENS,
     messages: [
       {
         role: "system",
         content:
-          "You are Scott, Orbit's manager agent. Review Nova's output against the original work order, company knowledge base, and the deliverable acceptance criteria. Return strict JSON with keys: decision (approve|revise), score (0-100), critique, requested_action, issues. Approve if it is usable by the operator, specific to the company, has a concrete CTA, and does not copy the knowledge base. Do not nitpick forever: if the draft is commercially usable with only minor polish, approve with a critique note. If revision is needed, requested_action must be specific enough for Nova to redo the work.",
+          `You are Scott, Orbit's manager agent. Review ${args.assignee.name}'s output against the original work order, company knowledge base, and the deliverable acceptance criteria. Return strict JSON with keys: decision (approve|revise), score (0-100), critique, requested_action, issues. Approve if it is usable by the operator, specific to the company, has a concrete CTA, and does not copy the knowledge base. Do not nitpick forever: if the draft is commercially usable with only minor polish, approve with a critique note. If revision is needed, requested_action must be specific enough for ${args.assignee.name} to redo the work.`,
       },
       {
         role: "user",
@@ -217,13 +384,14 @@ async function askScottToReview(args: {
           workflow_context: compactWorkflowContext(args.workflow),
           scott_plan: args.plan,
           deliverable: args.deliverable,
-          nova_output: args.output,
+          employee_agent: args.assignee,
+          employee_output: args.output,
         }),
       },
     ],
   });
 
-  const parsed = parseJsonObject<ScottReview>(response.choices[0]?.message?.content, "Scott review");
+  const parsed = parseJsonObject<ScottReview>(content, "Scott review");
   if (parsed.decision !== "approve" && parsed.decision !== "revise") {
     throw new Error("Scott review did not return decision approve|revise.");
   }
@@ -234,12 +402,13 @@ async function askScottToReview(args: {
   };
 }
 
-function toManagerWorkflowSteps(plan: ScottPlan): ManagerWorkflowStep[] {
+function toManagerWorkflowSteps(plan: ScottPlan, roster: ReturnType<typeof resolveAgentRoster>): ManagerWorkflowStep[] {
   return plan.steps.map((step) => {
     const label = `${step.id} ${step.label} ${step.summary}`.toLowerCase();
+    const owner = roster.byId.get(step.owner) ?? roster.manager;
     const isBootstrap = /request|receive|read|brief|context|intake/.test(label);
     const isReview = /review|approve|qa|quality|guardrail|final/.test(label);
-    const isDraft = step.owner === "nova" || /draft|write|create|compose|produce|asset|post|email|caption/.test(label);
+    const isDraft = owner.role === "employee" || /draft|write|create|compose|produce|asset|post|email|caption/.test(label);
     const completionStepIds: WorkflowStepId[] =
       isReview ? ["campaign_package_ready", "workflow_ready"]
       : isDraft ? ["campaign_draft_generated"]
@@ -250,8 +419,8 @@ function toManagerWorkflowSteps(plan: ScottPlan): ManagerWorkflowStep[] {
       id: step.id,
       label: step.label,
       owner_agent_id: step.owner,
-      owner_display_name: step.owner === "nova" ? "Nova" : "Scott",
-      owner_role: step.owner === "nova" ? "employee" : "manager",
+      owner_display_name: owner.name,
+      owner_role: owner.role,
       summary: step.summary,
       expected_output: step.expected_output,
       depends_on: step.depends_on ?? [],
@@ -281,7 +450,8 @@ function buildEmailDraft(output: NovaOutput, review: ScottReview, workflow: Work
     meta: {
       id: crypto.randomUUID(),
       day,
-      status: review.decision === "approve" ? "approved" : "revision_requested",
+      status: review.decision === "approve" ? "pending_review" : "revision_requested",
+      operator_status: review.decision === "approve" ? "pending" : "rejected",
       channel: "email",
       original_prompt: workflow.business_goal ?? "",
       strategic_intent: output.notes,
@@ -323,7 +493,8 @@ function buildLinkedInDraft(output: NovaOutput, review: ScottReview, workflow: W
     meta: {
       id: crypto.randomUUID(),
       day,
-      status: review.decision === "approve" ? "approved" : "revision_requested",
+      status: review.decision === "approve" ? "pending_review" : "revision_requested",
+      operator_status: review.decision === "approve" ? "pending" : "rejected",
       channel: "linkedin",
       original_prompt: workflow.business_goal ?? "",
       strategic_intent: output.notes,
@@ -373,7 +544,8 @@ function buildInstagramDraft(output: NovaOutput, review: ScottReview, workflow: 
     meta: {
       id: crypto.randomUUID(),
       day,
-      status: review.decision === "approve" ? "approved" : "revision_requested",
+      status: review.decision === "approve" ? "pending_review" : "revision_requested",
+      operator_status: review.decision === "approve" ? "pending" : "rejected",
       channel: "instagram",
       original_prompt: workflow.business_goal ?? "",
       strategic_intent: output.notes,
@@ -417,13 +589,13 @@ function buildDraft(
   return buildLinkedInDraft(output, review, workflow, day);
 }
 
-function buildManagerReview(draftId: string, review: ScottReview): ManagerContentReview {
+function buildManagerReview(draftId: string, review: ScottReview, assignee: RuntimeAgent): ManagerContentReview {
   return {
     draftId,
     reviewerAgentId: "scott",
     reviewerDisplayName: "Scott",
-    reviewedAgentId: "nova",
-    reviewedDisplayName: "Nova",
+    reviewedAgentId: assignee.id,
+    reviewedDisplayName: assignee.name,
     decision: review.decision,
     score: review.score,
     issues: review.issues.map((issue) => ({
@@ -436,15 +608,15 @@ function buildManagerReview(draftId: string, review: ScottReview): ManagerConten
   };
 }
 
-function buildManagerCritique(draftId: string, review: ScottReview): ManagerCritique {
+function buildManagerCritique(draftId: string, review: ScottReview, assignee: RuntimeAgent): ManagerCritique {
   const reasonCodes: ManagerCritiqueReasonCode[] =
     review.issues.length > 0 ? review.issues.slice(0, 4).map(() => "missing_synthesis") : [];
 
   return {
     id: crypto.randomUUID(),
     draftId,
-    targetAgentId: "nova",
-    targetAgentDisplayName: "Nova",
+    targetAgentId: assignee.id,
+    targetAgentDisplayName: assignee.name,
     managerAgentId: "scott",
     managerDisplayName: "Scott",
     severity: review.decision === "approve" ? "note" : review.score < 70 ? "blocker" : "pushback",
@@ -463,6 +635,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
   if (!workflow || !workflow.website_intelligence || !workflow.product_marketing_context) {
     throw new Error("Workflow missing required context for dynamic marketing execution.");
   }
+  const roster = resolveAgentRoster(workflow);
 
   workflowStore.addLog(workflowId, {
     role: "marketing_manager",
@@ -479,7 +652,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
   });
 
   const plan = await askScottForPlan(workflow);
-  const steps = toManagerWorkflowSteps(plan);
+  const steps = toManagerWorkflowSteps(plan, roster);
 
   workflowStore.updateWorkflow(workflowId, {
     status: "running",
@@ -519,14 +692,15 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
   let hasUnapprovedOutput = false;
 
   for (const [deliverableIndex, deliverable] of plan.deliverables.entries()) {
+    const assignee = employeeForDeliverable(deliverable, deliverableIndex, roster);
     workflowStore.addLog(workflowId, {
       role: "marketing_manager",
       step_id: "marketing_context_built",
-      message: `[Scott]: Delegating "${deliverable.title}" to Nova.`,
+      message: `[Scott]: Delegating "${deliverable.title}" to ${assignee.name}.`,
       metadata: {
         ui_event: {
           agent_id: "scott",
-          target_agent_id: "nova",
+          target_agent_id: assignee.id,
           state: "handoff",
           location_hint: "meetingManager",
           message: "Briefing",
@@ -534,14 +708,14 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
       },
     });
 
-    let novaOutput = await askNovaToExecute({ workflow, plan, deliverable });
+    let novaOutput = await askEmployeeToExecute({ workflow, plan, deliverable, assignee });
     workflowStore.addLog(workflowId, {
       role: "content_specialist",
       step_id: "campaign_draft_generated",
-      message: `[Nova]: Drafted "${deliverable.title}" for Scott review.`,
+      message: `[${assignee.name}]: Drafted "${deliverable.title}" for Scott review.`,
       metadata: {
         ui_event: {
-          agent_id: "nova",
+          agent_id: assignee.id,
           state: "working",
           location_hint: "employeeWork",
           message: "Drafting",
@@ -549,7 +723,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
       },
     });
 
-    let review = await askScottToReview({ workflow, plan, deliverable, output: novaOutput });
+    let review = await askScottToReview({ workflow, plan, deliverable, assignee, output: novaOutput });
     let revisionCount = 0;
 
     while (review.decision === "revise" && revisionCount < MAX_REVISIONS) {
@@ -566,33 +740,34 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
           },
         },
       });
-      novaOutput = await askNovaToExecute({
+      novaOutput = await askEmployeeToExecute({
         workflow,
         plan,
         deliverable,
+        assignee,
         revision: review,
         previousOutput: novaOutput,
       });
       workflowStore.addLog(workflowId, {
         role: "content_specialist",
         step_id: "campaign_draft_generated",
-        message: `[Nova]: Revised "${deliverable.title}" for Scott review.`,
+        message: `[${assignee.name}]: Revised "${deliverable.title}" for Scott review.`,
         metadata: {
           ui_event: {
-            agent_id: "nova",
+            agent_id: assignee.id,
             state: "working",
             location_hint: "employeeWork",
             message: "Revising",
           },
         },
       });
-      review = await askScottToReview({ workflow, plan, deliverable, output: novaOutput });
+      review = await askScottToReview({ workflow, plan, deliverable, assignee, output: novaOutput });
       revisionCount += 1;
     }
 
     const draft = buildDraft(novaOutput, review, workflow, deliverable, deliverableIndex);
-    const managerReview = buildManagerReview(draft.meta.id, review);
-    const critique = buildManagerCritique(draft.meta.id, review);
+    const managerReview = buildManagerReview(draft.meta.id, review, assignee);
+    const critique = buildManagerCritique(draft.meta.id, review, assignee);
     const draftWithReview: CampaignExecutionDraft = {
       ...draft,
       meta: {
@@ -621,7 +796,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
       step_id: "campaign_package_ready",
       message:
         review.decision === "approve" ?
-          `[Scott]: Approved Nova's "${deliverable.title}" with score ${review.score}.`
+          `[Scott]: Approved ${assignee.name}'s "${deliverable.title}" with score ${review.score}.`
         : `[Scott]: Returned "${deliverable.title}" after ${MAX_REVISIONS} revisions with score ${review.score}.`,
       metadata: {
         ui_event: {
@@ -639,7 +814,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
     step_id: "workflow_ready",
     message:
       hasUnapprovedOutput ?
-        "[Scott]: Work order needs operator review; Nova could not satisfy my approval criteria within the revision limit."
+        "[Scott]: Work order needs operator review; one or more sub-agents could not satisfy my approval criteria within the revision limit."
       : "[Scott]: Work order complete; approved outputs are ready for the UI.",
     metadata: {
       ui_event: {

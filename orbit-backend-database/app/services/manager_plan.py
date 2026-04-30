@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.models import (
     FinalOutputRequest,
+    MarketingAgentRosterItem,
     ManagerPlanPreviewRequest,
     ManagerPlanPreviewResponse,
     SevenDayLaunchCampaignResponse,
@@ -10,11 +11,26 @@ from app.models import (
 from app.seed_data import DEMO_SEED_LYRA_CAMPAIGN, DEMO_SEED_LYRA_MANAGER_PLAN
 
 
+def _roster_for_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder | None) -> list[MarketingAgentRosterItem]:
+    roster = request.agentRoster or (work_order.agentRoster if work_order else [])
+    enabled = [agent for agent in roster if agent.enabled]
+    return enabled or [
+        MarketingAgentRosterItem(id=request.managerAgentId, name=request.managerAgentId.title(), role="manager"),
+    ]
+
+
+def _first_employee(roster: list[MarketingAgentRosterItem], manager_id: str) -> MarketingAgentRosterItem:
+    employee = next((agent for agent in roster if agent.role == "employee"), None)
+    return employee or MarketingAgentRosterItem(id=manager_id, name=manager_id.title(), role="manager")
+
+
 def build_manager_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder | None) -> ManagerPlanPreviewResponse:
     if request.workOrderId == "wo-launch-001":
         return DEMO_SEED_LYRA_MANAGER_PLAN
 
     manager_id = request.managerAgentId
+    roster = _roster_for_plan(request, work_order)
+    employee = _first_employee(roster, manager_id)
     return ManagerPlanPreviewResponse(
         workOrderId=request.workOrderId,
         managerAgentId=manager_id,
@@ -22,7 +38,7 @@ def build_manager_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder
         objective=request.objective,
         outputType=request.outputType,
         contextSections=request.contextSections,
-        planSummary=f"{manager_id} will read context, create an execution plan, delegate production work, then review and assemble {request.outputType}.",
+        planSummary=f"{manager_id} will read context, create an execution plan, delegate production work to available sub-agents, then review and assemble {request.outputType}.",
         assumptions=[
             "The requested context sections are available and compiled.",
             "The operator wants a reviewable output before external action.",
@@ -52,12 +68,12 @@ def build_manager_plan(request: ManagerPlanPreviewRequest, work_order: WorkOrder
             {
                 "id": "production",
                 "kind": "production",
-                "title": "Produce assigned work",
-                "ownerAgentId": manager_id,
-                "ownerRole": "manager",
+                "title": "Produce assigned specialist work",
+                "ownerAgentId": employee.id,
+                "ownerRole": employee.role,
                 "dependsOn": ["strategy"],
                 "contextRequired": request.contextSections,
-                "instructions": "Create the first draft or delegate specialist tasks if employee agents are available.",
+                "instructions": f"{employee.name} executes the manager-assigned production task using only approved company context.",
                 "expectedOutput": request.outputType,
                 "acceptanceCriteria": ["Matches objective", "Follows context constraints", "Ready for manager review"],
                 "estimatedMinutes": 8,

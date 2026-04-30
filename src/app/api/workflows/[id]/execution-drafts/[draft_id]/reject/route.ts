@@ -9,22 +9,30 @@ interface RouteParams {
   }>;
 }
 
-export async function POST(_request: Request, context: RouteParams) {
+interface RejectDraftBody {
+  reviewer_note?: string;
+}
+
+export async function POST(request: Request, context: RouteParams) {
   const params = await context.params;
   const workflow = workflowStore.getWorkflow(params.id);
   if (!workflow) {
     return NextResponse.json({ error: "Workflow not found." }, { status: 404 });
   }
 
+  const body = (await request.json().catch(() => ({}))) as RejectDraftBody;
+  const reviewerNote = body.reviewer_note?.trim() || "Rejected by operator.";
   const reviewedAt = new Date().toISOString();
+
   const updated = workflowStore.updateDraft(params.id, params.draft_id, (draft) => ({
     ...draft,
     meta: {
       ...draft.meta,
-      status: "approved",
-      operator_status: "approved",
+      status: "rejected",
+      operator_status: "rejected",
       operator_reviewed_at: reviewedAt,
       operator_reviewer: "human_operator",
+      reviewer_note: reviewerNote,
     },
   }));
 
@@ -35,29 +43,19 @@ export async function POST(_request: Request, context: RouteParams) {
   workflowStore.addLog(params.id, {
     role: "orchestrator",
     step_id: "campaign_package_ready",
-    message: `[Scott]: Operator approved draft ${params.draft_id}.`,
+    message: `[Scott]: Operator rejected draft ${params.draft_id} - ${reviewerNote}`,
     metadata: {
       draft_id: params.draft_id,
-      operator_status: "approved",
+      operator_status: "rejected",
+      reviewer_note: reviewerNote,
     },
   });
 
-  const allApproved = workflowStore
-    .getWorkflow(params.id)
-    ?.campaign_execution_drafts.every((draft) => draft.meta.operator_status === "approved");
-
-  if (allApproved) {
-    workflowStore.addLog(params.id, {
-      role: "marketing_manager",
-      step_id: "workflow_ready",
-      message: "[Scott]: All drafts are operator-approved - execution is now available.",
-    });
-  }
-
   return NextResponse.json({
     draft_id: params.draft_id,
-    status: "approved",
-    operator_status: "approved",
+    status: "rejected",
+    operator_status: "rejected",
     operator_reviewed_at: reviewedAt,
+    reviewer_note: reviewerNote,
   });
 }

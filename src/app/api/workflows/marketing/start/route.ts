@@ -11,6 +11,7 @@ import { scrapeWebsiteIntelligence } from "@/lib/services/web-scraper";
 import { runMarketingWorkOrder } from "@/lib/services/workflow-execution";
 import { workflowStore } from "@/lib/state/workflow-store";
 import {
+  type MarketingAgentRosterItem,
   NOVAS_RESEARCH_REPORT_TITLE,
   type ProductMarketingContext,
   type WorkflowState,
@@ -34,6 +35,7 @@ interface StartWorkflowRequestBody {
   business_goal?: string;
   success_metric?: string;
   brand_learning_notes?: string[];
+  agent_roster?: MarketingAgentRosterItem[];
 }
 
 export async function POST(request: Request) {
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
     Array.isArray(body.brand_learning_notes) ?
       body.brand_learning_notes.map((n) => String(n).trim()).filter(Boolean)
     : undefined;
+  const agentRoster = normalizeAgentRoster(body.agent_roster);
 
   if (!companyUrl) {
     return NextResponse.json(
@@ -100,6 +103,7 @@ export async function POST(request: Request) {
       ...(businessGoal ? { business_goal: businessGoal } : {}),
       ...(successMetric ? { success_metric: successMetric } : {}),
       ...(brandLearningNotes?.length ? { brand_learning_notes: brandLearningNotes } : {}),
+      ...(agentRoster.length ? { agent_roster: agentRoster } : {}),
       website_intelligence: warmProfile?.website_intelligence ?? mockCompany.website_intelligence,
       intelligence_validation: warmProfile?.intelligence_validation ?? mockCompany.intelligence_validation,
       brand_kit: warmProfile?.brand_kit ?? mockCompany.brand_kit,
@@ -133,6 +137,7 @@ export async function POST(request: Request) {
     ...(businessGoal ? { business_goal: businessGoal } : {}),
     ...(successMetric ? { success_metric: successMetric } : {}),
     ...(brandLearningNotes?.length ? { brand_learning_notes: brandLearningNotes } : {}),
+    ...(agentRoster.length ? { agent_roster: agentRoster } : {}),
     campaign_execution_drafts: [],
     generated_campaign_assets: [],
     activity_logs: [],
@@ -194,6 +199,42 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ workflow_id: workflowId, status: "started" });
+}
+
+function normalizeAgentRoster(value: unknown): MarketingAgentRosterItem[] {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  return value
+    .map((item): MarketingAgentRosterItem | null => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const id = String(record.id ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const name = String(record.name ?? "").trim();
+      const role = record.role === "manager" ? "manager" : record.role === "employee" ? "employee" : null;
+      if (!id || !name || !role || seen.has(id)) return null;
+      seen.add(id);
+
+      const tools = Array.isArray(record.tools)
+        ? record.tools.map((tool) => String(tool).trim()).filter(Boolean).slice(0, 20)
+        : undefined;
+      const autonomy = Number(record.autonomy);
+
+      return {
+        id,
+        name,
+        role,
+        ...(typeof record.model === "string" && record.model.trim() ? { model: record.model.trim() } : {}),
+        ...(tools?.length ? { tools } : {}),
+        ...(Number.isFinite(autonomy) ? { autonomy: Math.max(1, Math.min(5, Math.round(autonomy))) } : {}),
+        ...(typeof record.enabled === "boolean" ? { enabled: record.enabled } : {}),
+      };
+    })
+    .filter((item): item is MarketingAgentRosterItem => Boolean(item));
 }
 
 function runWorkflowInBackground(workflowId: string): void {

@@ -16,6 +16,7 @@ from app.models import (
     DepartmentContextLog,
     EditableContextSectionId,
     MapPreset,
+    MarketingAgentRosterItem,
     OfficeMap,
     OfficeMapAsset,
     OfficeMapAssetCreate,
@@ -27,6 +28,11 @@ from app.models import (
     WorkOrderEvent,
     WorkOrderOutput,
     WorkOrderStatus,
+    WorkflowActivityLogSnapshot,
+    WorkflowRunSnapshot,
+    WorkflowSnapshotSyncRequest,
+    WorkflowSnapshotSyncResponse,
+    WorkflowTaskSnapshot,
 )
 from app.seed_data import INITIAL_COMPANY_CONTEXT, INITIAL_MAP_PRESETS, INITIAL_OFFICE_MAPS, INITIAL_WORK_ORDERS
 
@@ -68,6 +74,40 @@ CREATE TABLE IF NOT EXISTS work_order_events (
   work_order_id TEXT NOT NULL,
   type TEXT NOT NULL,
   message TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+  workflow_id TEXT PRIMARY KEY,
+  work_order_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_tasks (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  work_order_id TEXT NOT NULL,
+  type TEXT NOT NULL,
+  channel TEXT,
+  status TEXT NOT NULL,
+  operator_status TEXT NOT NULL,
+  title TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_activity_logs (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  work_order_id TEXT NOT NULL,
+  role TEXT,
+  step_id TEXT,
+  message TEXT NOT NULL,
+  payload TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 
@@ -132,6 +172,46 @@ def dumps_dict(payload: dict) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+def ensure_workflow_tables(db: sqlite3.Connection) -> None:
+    db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+          workflow_id TEXT PRIMARY KEY,
+          work_order_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_tasks (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          work_order_id TEXT NOT NULL,
+          type TEXT NOT NULL,
+          channel TEXT,
+          status TEXT NOT NULL,
+          operator_status TEXT NOT NULL,
+          title TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS workflow_activity_logs (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          work_order_id TEXT NOT NULL,
+          role TEXT,
+          step_id TEXT,
+          message TEXT NOT NULL,
+          payload TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 def connect() -> sqlite3.Connection:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(DB_PATH)
@@ -142,8 +222,10 @@ def connect() -> sqlite3.Connection:
 def init_db() -> None:
     with connect() as db:
       db.executescript(SCHEMA)
+      ensure_workflow_tables(db)
       seed_if_empty(db)
       seed_maps_if_empty(db)
+      backfill_work_order_agent_rosters(db)
 
 
 def seed_if_empty(db: sqlite3.Connection) -> None:
@@ -166,6 +248,35 @@ def seed_if_empty(db: sqlite3.Connection) -> None:
             (work_order.id, dumps_model(work_order), work_order.status, work_order.createdAt, timestamp),
         )
         add_event(db, work_order.id, "seeded", "Seed work order loaded.")
+
+
+def backfill_work_order_agent_rosters(db: sqlite3.Connection) -> None:
+    rows = db.execute("SELECT id, payload FROM work_orders").fetchall()
+    seed_rosters = {work_order.id: work_order.agentRoster for work_order in INITIAL_WORK_ORDERS}
+
+    for row in rows:
+        payload = json.loads(row["payload"])
+        if payload.get("agentRoster"):
+            continue
+
+        workflow_roster: list[MarketingAgentRosterItem] = []
+        workflow_id = payload.get("workflowId")
+        if workflow_id:
+            workflow_row = db.execute("SELECT payload FROM workflow_runs WHERE workflow_id = ?", (workflow_id,)).fetchone()
+            if workflow_row:
+                workflow_roster = _coerce_agent_roster(json.loads(workflow_row["payload"]).get("agent_roster"))
+
+        roster = workflow_roster or seed_rosters.get(row["id"], [])
+        if not roster:
+            manager_id = str(payload.get("managerAgentId") or "scott").strip().lower()
+            roster = [MarketingAgentRosterItem(id=manager_id, name=manager_id.title(), role="manager")]
+
+        work_order = WorkOrder(**payload).model_copy(update={"agentRoster": roster})
+        timestamp = now_iso()
+        db.execute(
+            "UPDATE work_orders SET payload = ?, updated_at = ? WHERE id = ?",
+            (dumps_model(work_order), timestamp, row["id"]),
+        )
 
 
 def seed_maps_if_empty(db: sqlite3.Connection) -> None:
@@ -380,6 +491,7 @@ def create_work_order(request: WorkOrderCreateRequest) -> WorkOrder:
         createdAt=created_at,
         workflowId=request.workflowId,
         workflowStatus=request.workflowStatus,
+        agentRoster=request.agentRoster,
     )
     with connect() as db:
         db.execute(
@@ -485,6 +597,302 @@ def list_work_order_events(work_order_id: str) -> list[WorkOrderEvent]:
         )
         for row in rows
     ]
+
+
+def _nested_value(payload: dict, *path: str):
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _coerce_agent_roster(value) -> list[MarketingAgentRosterItem]:
+    if not isinstance(value, list):
+        return []
+
+    roster: list[MarketingAgentRosterItem] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id") or "").strip().lower()
+        role = str(item.get("role") or "").strip().lower()
+        if not agent_id or agent_id in seen or role not in {"manager", "employee"}:
+            continue
+        tools = item.get("tools")
+        roster.append(
+            MarketingAgentRosterItem(
+                id=agent_id,
+                name=str(item.get("name") or agent_id.title()),
+                role=role,  # type: ignore[arg-type]
+                model=str(item.get("model")) if item.get("model") else None,
+                tools=[str(tool) for tool in tools] if isinstance(tools, list) else [],
+                autonomy=item.get("autonomy") if isinstance(item.get("autonomy"), int) else None,
+                enabled=bool(item.get("enabled", True)),
+            )
+        )
+        seen.add(agent_id)
+    return roster
+
+
+def _task_id(task: dict, fallback_index: int) -> str:
+    return str(task.get("draft_id") or _nested_value(task, "meta", "id") or task.get("id") or f"draft-{fallback_index}")
+
+
+def _task_status(task: dict) -> str:
+    return str(task.get("status") or _nested_value(task, "meta", "status") or "pending_review")
+
+
+def _operator_status(task: dict) -> str:
+    value = str(_nested_value(task, "meta", "operator_status") or task.get("operatorStatus") or "").lower()
+    if value in {"approved", "rejected"}:
+        return value
+    if _task_status(task) == "rejected":
+        return "rejected"
+    return "pending"
+
+
+def _task_channel(task: dict) -> str | None:
+    value = task.get("channel") or _nested_value(task, "meta", "channel") or task.get("platform") or task.get("type")
+    return str(value) if value else None
+
+
+def _task_title(task: dict, fallback_index: int) -> str:
+    value = (
+        task.get("headline")
+        or task.get("subject_line")
+        or task.get("title")
+        or _nested_value(task, "slides", "0", "headline")
+    )
+    return str(value or f"Generated task {fallback_index + 1}")
+
+
+def _log_id(log: dict, fallback_index: int, workflow_id: str) -> str:
+    return str(log.get("id") or f"{workflow_id}-log-{fallback_index}")
+
+
+def _log_created_at(log: dict) -> str:
+    value = log.get("created_at") or log.get("timestamp")
+    return str(value or now_iso())
+
+
+def _status_from_workflow(workflow_status: str, tasks: list[dict]) -> WorkOrderStatus:
+    normalized = workflow_status.lower()
+    if normalized in {"running", "started", "processing"}:
+        return "running"
+    if normalized in {"failed", "error"}:
+        return "review"
+    if any(_operator_status(task) == "pending" for task in tasks):
+        return "review"
+    return "complete"
+
+
+def sync_workflow_snapshot(work_order_id: str, request: WorkflowSnapshotSyncRequest) -> WorkflowSnapshotSyncResponse | None:
+    work_order = get_work_order(work_order_id)
+    if not work_order:
+        return None
+
+    timestamp = now_iso()
+    workflow_status = request.status or str(request.workflow.get("status") or "running")
+    next_status = _status_from_workflow(workflow_status, request.tasks)
+    workflow_roster = _coerce_agent_roster(request.workflow.get("agent_roster"))
+    updated_work_order = work_order.model_copy(
+        update={
+            "status": next_status,
+            "workflowId": request.workflowId,
+            "workflowStatus": workflow_status,
+            "agentRoster": workflow_roster or work_order.agentRoster,
+        }
+    )
+
+    task_snapshots: list[WorkflowTaskSnapshot] = []
+    log_snapshots: list[WorkflowActivityLogSnapshot] = []
+
+    with connect() as db:
+        ensure_workflow_tables(db)
+        workflow_updated_at = str(request.workflow.get("updated_at") or timestamp)
+        existing_run = db.execute(
+            "SELECT status, updated_at FROM workflow_runs WHERE workflow_id = ?",
+            (request.workflowId,),
+        ).fetchone()
+        existing_task_rows = db.execute(
+            "SELECT id, status, operator_status, json_extract(payload, '$.meta.gmail_message_id') AS gmail_message_id FROM workflow_tasks WHERE workflow_id = ?",
+            (request.workflowId,),
+        ).fetchall()
+        existing_tasks = {
+            row["id"]: {
+                "status": row["status"],
+                "operator_status": row["operator_status"],
+                "gmail_message_id": row["gmail_message_id"],
+            }
+            for row in existing_task_rows
+        }
+        existing_log_count = db.execute(
+            "SELECT COUNT(*) AS count FROM workflow_activity_logs WHERE workflow_id = ?",
+            (request.workflowId,),
+        ).fetchone()["count"]
+        sync_changed = (
+            existing_run is None
+            or existing_run["status"] != workflow_status
+            or existing_run["updated_at"] != workflow_updated_at
+            or existing_log_count != len(request.activityLogs)
+            or len(existing_tasks) != len(request.tasks)
+        )
+        db.execute(
+            """
+            INSERT INTO workflow_runs (workflow_id, work_order_id, status, payload, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workflow_id) DO UPDATE SET
+              work_order_id = excluded.work_order_id,
+              status = excluded.status,
+              payload = excluded.payload,
+              updated_at = excluded.updated_at
+            """,
+            (
+                request.workflowId,
+                work_order_id,
+                workflow_status,
+                dumps_dict(request.workflow),
+                request.workflow.get("created_at") or timestamp,
+                workflow_updated_at,
+            ),
+        )
+
+        for index, task in enumerate(request.tasks):
+            task_id = _task_id(task, index)
+            task_type = str(task.get("type") or "task")
+            channel = _task_channel(task)
+            status = _task_status(task)
+            operator_status = _operator_status(task)
+            title = _task_title(task, index)
+            task_updated_at = str(_nested_value(task, "meta", "operator_reviewed_at") or request.workflow.get("updated_at") or timestamp)
+            previous_task = existing_tasks.get(task_id)
+            task_gmail_message_id = _nested_value(task, "meta", "gmail_message_id")
+            if (
+                previous_task is None
+                or previous_task["status"] != status
+                or previous_task["operator_status"] != operator_status
+                or str(previous_task["gmail_message_id"] or "") != str(task_gmail_message_id or "")
+            ):
+                sync_changed = True
+            db.execute(
+                """
+                INSERT INTO workflow_tasks (
+                  id, workflow_id, work_order_id, type, channel, status, operator_status, title, payload, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  workflow_id = excluded.workflow_id,
+                  work_order_id = excluded.work_order_id,
+                  type = excluded.type,
+                  channel = excluded.channel,
+                  status = excluded.status,
+                  operator_status = excluded.operator_status,
+                  title = excluded.title,
+                  payload = excluded.payload,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    task_id,
+                    request.workflowId,
+                    work_order_id,
+                    task_type,
+                    channel,
+                    status,
+                    operator_status,
+                    title,
+                    dumps_dict(task),
+                    task_updated_at,
+                    task_updated_at,
+                ),
+            )
+            task_snapshots.append(
+                WorkflowTaskSnapshot(
+                    id=task_id,
+                    workflowId=request.workflowId,
+                    workOrderId=work_order_id,
+                    type=task_type,
+                    channel=channel,
+                    status=status,
+                    operatorStatus=operator_status,  # type: ignore[arg-type]
+                    title=title,
+                    payload=task,
+                    updatedAt=task_updated_at,
+                )
+            )
+
+        for index, log in enumerate(request.activityLogs):
+            log_id = _log_id(log, index, request.workflowId)
+            created_at = _log_created_at(log)
+            role = log.get("role")
+            step_id = log.get("step_id")
+            message = str(log.get("message") or "")
+            db.execute(
+                """
+                INSERT INTO workflow_activity_logs (id, workflow_id, work_order_id, role, step_id, message, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                  workflow_id = excluded.workflow_id,
+                  work_order_id = excluded.work_order_id,
+                  role = excluded.role,
+                  step_id = excluded.step_id,
+                  message = excluded.message,
+                  payload = excluded.payload,
+                  created_at = excluded.created_at
+                """,
+                (
+                    log_id,
+                    request.workflowId,
+                    work_order_id,
+                    str(role) if role else None,
+                    str(step_id) if step_id else None,
+                    message,
+                    dumps_dict(log),
+                    created_at,
+                ),
+            )
+            log_snapshots.append(
+                WorkflowActivityLogSnapshot(
+                    id=log_id,
+                    workflowId=request.workflowId,
+                    workOrderId=work_order_id,
+                    role=str(role) if role else None,
+                    stepId=str(step_id) if step_id else None,
+                    message=message,
+                    payload=log,
+                    createdAt=created_at,
+                )
+            )
+
+        db.execute(
+            "UPDATE work_orders SET payload = ?, status = ?, updated_at = ? WHERE id = ?",
+            (dumps_model(updated_work_order), next_status, timestamp, work_order_id),
+        )
+
+        if request.finalOutput is not None and request.outputType:
+            db.execute(
+                "INSERT OR REPLACE INTO work_order_outputs (work_order_id, output_type, payload, created_at) VALUES (?, ?, ?, ?)",
+                (work_order_id, request.outputType, dumps_dict(request.finalOutput), timestamp),
+            )
+
+        if sync_changed:
+            add_event(db, work_order_id, "workflow_synced", f"Workflow snapshot synced: {request.workflowId} ({workflow_status}).")
+
+    return WorkflowSnapshotSyncResponse(
+        workOrder=updated_work_order,
+        workflow=WorkflowRunSnapshot(
+            workflowId=request.workflowId,
+            workOrderId=work_order_id,
+            status=workflow_status,
+            payload=request.workflow,
+            updatedAt=str(request.workflow.get("updated_at") or timestamp),
+        ),
+        tasks=task_snapshots,
+        activityLogsStored=len(log_snapshots),
+        finalOutputStored=request.finalOutput is not None and request.outputType is not None,
+    )
 
 
 def row_to_office_map(row: sqlite3.Row) -> OfficeMap:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,16 @@ SubtaskOwner = Literal["manager", "employee"]
 ManagerPlanRiskLevel = Literal["low", "medium", "high"]
 ManagerPlanStepKind = Literal["strategy", "delegation", "production", "review", "assembly"]
 LaunchCampaignChannel = Literal["linkedin", "x", "email", "blog", "landing_page"]
+
+
+class MarketingAgentRosterItem(BaseModel):
+    id: str
+    name: str
+    role: SubtaskOwner
+    model: str | None = None
+    tools: list[str] = Field(default_factory=list)
+    autonomy: int | None = None
+    enabled: bool = True
 
 
 class ContextDocument(BaseModel):
@@ -101,6 +111,7 @@ class WorkOrder(BaseModel):
     createdAt: str
     workflowId: str | None = None
     workflowStatus: str | None = None
+    agentRoster: list[MarketingAgentRosterItem] = Field(default_factory=list)
 
 
 class WorkOrderCreateRequest(BaseModel):
@@ -117,6 +128,7 @@ class WorkOrderCreateRequest(BaseModel):
     subtasks: list[WorkOrderSubtask] = []
     workflowId: str | None = None
     workflowStatus: str | None = None
+    agentRoster: list[MarketingAgentRosterItem] = Field(default_factory=list)
 
 
 class WorkOrderStatusPatch(BaseModel):
@@ -165,6 +177,7 @@ class ManagerPlanPreviewRequest(BaseModel):
     outputType: WorkOrderOutputType
     contextSections: list[ContextSectionId]
     autonomy: WorkOrderAutonomy
+    agentRoster: list[MarketingAgentRosterItem] = Field(default_factory=list)
 
 
 class ManagerPlanPreviewResponse(BaseModel):
@@ -219,6 +232,56 @@ class WorkOrderOutput(BaseModel):
 class FinalOutputRequest(BaseModel):
     outputType: WorkOrderOutputType
     payload: dict | None = None
+
+
+class WorkflowTaskSnapshot(BaseModel):
+    id: str
+    workflowId: str
+    workOrderId: str
+    type: str
+    channel: str | None = None
+    status: str
+    operatorStatus: Literal["pending", "approved", "rejected"]
+    title: str
+    payload: dict[str, Any]
+    updatedAt: str
+
+
+class WorkflowRunSnapshot(BaseModel):
+    workflowId: str
+    workOrderId: str
+    status: str
+    payload: dict[str, Any]
+    updatedAt: str
+
+
+class WorkflowActivityLogSnapshot(BaseModel):
+    id: str
+    workflowId: str
+    workOrderId: str
+    role: str | None = None
+    stepId: str | None = None
+    message: str
+    payload: dict[str, Any]
+    createdAt: str
+
+
+class WorkflowSnapshotSyncRequest(BaseModel):
+    workflowId: str
+    status: str
+    workflow: dict[str, Any]
+    tasks: list[dict[str, Any]] = []
+    activityLogs: list[dict[str, Any]] = []
+    finalOutput: dict[str, Any] | None = None
+    outputType: WorkOrderOutputType | str | None = None
+
+
+class WorkflowSnapshotSyncResponse(BaseModel):
+    workOrder: WorkOrder
+    workflow: WorkflowRunSnapshot
+    tasks: list[WorkflowTaskSnapshot]
+    activityLogsStored: int
+    finalOutputStored: bool
 
 
 class HealthResponse(BaseModel):

@@ -7,6 +7,7 @@ import {
   isAyrshareProductionBlocked,
   schedulePost,
 } from "@/lib/services/social-orchestrator";
+import { resolveAbsoluteAssetUrl } from "@/lib/services/public-assets";
 import type { CampaignExecutionDraft } from "@/lib/types/orbit";
 import { workflowStore } from "@/lib/state/workflow-store";
 
@@ -22,16 +23,6 @@ interface PublishBody {
   draft_id?: string;
   platform?: PublishPlatform;
   schedule_time?: string;
-}
-
-function resolveAbsoluteAssetUrl(urlOrPath: string): string {
-  if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
-    return urlOrPath;
-  }
-  const base =
-    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "http://localhost:3000";
-  const path = urlOrPath.startsWith("/") ? urlOrPath : `/${urlOrPath}`;
-  return `${base}${path}`;
 }
 
 function resolveDraftImageUrl(

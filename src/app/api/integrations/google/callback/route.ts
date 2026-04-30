@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     const result = await exchangeGoogleCode(code, state);
     return NextResponse.json({
       ...result,
-      message: "Gmail connected for this backend process. Add GOOGLE_REFRESH_TOKEN to .env.local for persistence after restart.",
+      message: "Gmail connected and the refresh token was saved in the backend integration store.",
     });
   } catch (error) {
     return NextResponse.json(
