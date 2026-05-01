@@ -125,7 +125,7 @@ class WorkflowStore {
       if (!fs.existsSync(this.storagePath)) return;
       const raw = fs.readFileSync(this.storagePath, "utf8");
       if (!raw.trim()) return;
-      const parsed = JSON.parse(raw) as WorkflowState[];
+      const parsed = JSON.parse(raw.replace(/^\uFEFF/, "")) as WorkflowState[];
       this.workflows.clear();
       for (const workflow of parsed) {
         this.workflows.set(workflow.id, workflow);

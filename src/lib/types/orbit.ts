@@ -532,12 +532,14 @@ export interface GeneratedCampaignAsset {
   id: string;
   draft_type: CampaignExecutionDraft["type"];
   platform: "instagram" | "linkedin" | "email";
-  day: 1 | 3 | 5;
+  day: number;
   prompt: string;
   image_prompt_detailed?: string;
   negative_prompt?: string;
   visual_source_anchor?: string;
   visual_style_notes?: string;
+  visual_mode?: string;
+  source_draft_id?: string;
   image_url: string;
   created_at: string;
 }

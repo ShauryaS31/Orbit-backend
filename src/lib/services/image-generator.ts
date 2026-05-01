@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { uploadPublicAsset } from "@/lib/services/supabase-storage";
 import type { BrandKit, VisualIdentity } from "@/lib/types/orbit";
 
-const DEFAULT_VISUAL_VIBE = "clean editorial abstraction with soft lighting";
+const DEFAULT_VISUAL_VIBE = "clean editorial campaign photography with soft lighting";
 
 export const IMAGE_GENERATION_ENABLED = process.env.ENABLE_IMAGE_GEN === "true";
 const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1.5";
@@ -17,12 +17,15 @@ const PLACEHOLDER_BRAND_MOTIF_URL = "/images/placeholder-brand-motif.png";
 
 let dormantCreditNoticeEmitted = false;
 
+export type ImageVisualMode = "photo_real_editorial" | "brand_graphic" | "abstract_background";
+
 export async function generateBrandBackground(
   prompt: string,
   palette: BrandKit,
   visualIdentity?: VisualIdentity,
+  visualMode: ImageVisualMode = "brand_graphic",
 ): Promise<{ image_url: string; full_prompt: string; dormant?: boolean }> {
-  const fullPrompt = buildBrandPrompt(prompt, palette, visualIdentity);
+  const fullPrompt = buildBrandPrompt(prompt, palette, visualIdentity, visualMode);
 
   if (!IMAGE_GENERATION_ENABLED) {
     if (!dormantCreditNoticeEmitted) {
@@ -128,6 +131,7 @@ function buildBrandPrompt(
   prompt: string,
   palette: BrandKit,
   visualIdentity?: VisualIdentity,
+  visualMode: ImageVisualMode = "brand_graphic",
 ): string {
   const vibe = palette.tone_of_voice.join(", ") || DEFAULT_VISUAL_VIBE;
   const visualDna = visualIdentity
@@ -136,7 +140,21 @@ function buildBrandPrompt(
   const hasDetailedCreativeBrief =
     /subject:|setting:|composition:|camera\/framing:|lighting:|source anchor:/i.test(prompt);
 
-  if (hasDetailedCreativeBrief) {
+  if (visualMode === "photo_real_editorial") {
+    return [
+      "Create a hyper-realistic editorial campaign photograph from this creative director brief.",
+      "The image must look like a real camera captured a believable scene with natural anatomy, real materials, plausible perspective, and documentary lighting.",
+      "Do not make abstract gradients, vector art, isometric art, 3D renders, neon sci-fi motifs, generic AI posters, or decorative brand backgrounds.",
+      "Do not include readable text, logos, watermarks, captions, or UI mockups inside the raster unless the brief explicitly requests a physical prop with unreadable markings.",
+      "Leave clean negative space where design typography can be overlaid later.",
+      `Use the brand HEX system only as subtle art direction/accent color, not as a full-screen gradient: ${palette.primary_hex}, ${palette.secondary_hex}, ${palette.accent_hex}, ${palette.neutral_hex}.`,
+      `Brand tone: ${vibe}.`,
+      visualDna,
+      prompt,
+    ].join(" ");
+  }
+
+  if (hasDetailedCreativeBrief || visualMode === "brand_graphic") {
     return [
       "Create a premium, high-end editorial campaign image from this creative director brief.",
       "Do not include readable text unless the brief explicitly asks for overlay room; leave clean negative space for UI typography.",
