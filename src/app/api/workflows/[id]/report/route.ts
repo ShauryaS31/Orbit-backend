@@ -1,5 +1,17 @@
 import { NextResponse } from "next/server";
 
+import {
+  computePhase2bVisualTelemetry,
+  countBannedPhrasesInLinkedInDrafts,
+  HEIDI_AI_LINKEDIN_PLAYBOOK_ID,
+  linkedInHeadlineTelemetryForWorkflow,
+} from "@/lib/services/channel-intelligence";
+import { computePhase2eLinkedInPlaybookTelemetry } from "@/lib/services/channel-playbook-loader";
+import { computePhase2fLinkedInImageTelemetry } from "@/lib/services/playbook-linkedin-image-prompt";
+import {
+  computePhase2cRenderingTelemetry,
+  computePhase2dRendererTelemetry,
+} from "@/lib/services/linkedin-card-renderer";
 import { workflowStore } from "@/lib/state/workflow-store";
 import {
   governancePersonaDisplayName,
@@ -257,6 +269,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     "",
     buildTrendScoutSection(workflow.trend_intelligence),
     "",
+    buildLinkedInChannelIntelligenceSection(workflow),
     "## Visual intelligence stack",
     "",
     "| Lens | Observation |",
@@ -267,7 +280,7 @@ function buildReportMarkdown(workflow: NonNullable<ReturnType<typeof workflowSto
     `| Spatial grammar | ${visualIdentity?.design_patterns.join("; ") ?? "-"} |`,
     `| Typography posture | ${visualIdentity?.typography_vibes.join("; ") ?? "-"} |`,
     "",
-    "## Lyra Proof Anchors Used",
+    workflow.lyra_warm_intelligence ? "## Lyra Proof Anchors Used" : "## Warm proof anchors",
     "",
     warmAnchors,
     "",
@@ -397,6 +410,235 @@ function collectWorkflowCritiques(
   return workflow.campaign_execution_drafts
     .map((d) => d.meta.manager_critique)
     .filter((c): c is ManagerCritique => Boolean(c));
+}
+
+function buildLinkedInChannelIntelligenceSection(
+  workflow: NonNullable<ReturnType<typeof workflowStore.getWorkflow>>,
+): string {
+  const li = workflow.channel_intelligence?.linkedin;
+  if (!li) {
+    return [
+      "## LinkedIn Channel Intelligence",
+      "",
+      "_No LinkedIn Channel Intelligence payload on this workflow — execution relied on generic company context only._",
+      "",
+    ].join("\n");
+  }
+
+  const draftsUsingPlaybook = workflow.campaign_execution_drafts.filter((d) =>
+    Boolean(d.meta.channel_intelligence_profile_id),
+  );
+  const sampleReasons = draftsUsingPlaybook
+    .map((d) => d.meta.channel_style_match_reason)
+    .filter((s): s is string => Boolean(s))
+    .slice(0, 8);
+
+  const critiques = collectWorkflowCritiques(workflow);
+  const channelFitCritiques = critiques.filter(
+    (c) =>
+      c.reasonCodes.includes("generic_channel_fit") ||
+      c.reasonCodes.includes("visual_too_generic") ||
+      /channel playbook QA:|channel-intelligence|channel-visual/i.test(c.critique),
+  );
+
+  const formatRows =
+    li.post_format_patterns.length ?
+      li.post_format_patterns.map((p) => `- **${escapePipes(p.id)}** — ${escapePipes(p.label)}`).join("\n")
+    : "_No format patterns._";
+
+  const antiRows =
+    li.anti_generic_rules.length ?
+      li.anti_generic_rules.map((r) => `- ${escapePipes(r)}`).join("\n")
+    : "_None listed._";
+
+  const assetHits = workflow.generated_campaign_assets.filter((a) => Boolean(a.channel_visual_profile_id)).length;
+
+  const headlineTel = linkedInHeadlineTelemetryForWorkflow(workflow);
+  const bannedPhraseOccurrences = countBannedPhrasesInLinkedInDrafts(
+    workflow.campaign_execution_drafts,
+    li.generation_rules.banned_phrases,
+  );
+
+  const phase2b = computePhase2bVisualTelemetry(workflow);
+  const phase2c = computePhase2cRenderingTelemetry(workflow);
+  const phase2d = computePhase2dRendererTelemetry(workflow);
+  const phase2e = computePhase2eLinkedInPlaybookTelemetry(workflow);
+  const phase2f = computePhase2fLinkedInImageTelemetry(workflow);
+  const phase2eContractLines =
+    workflow.generated_campaign_assets
+      .filter((a) => a.playbook_driven && a.visible_text_contract)
+      .slice(0, 8)
+      .map(
+        (a) =>
+          `- **Day ${a.day}:** \`${escapePipes((a.visible_text_contract ?? "").slice(0, 260))}${(a.visible_text_contract?.length ?? 0) > 260 ? "…" : ""}\``,
+      );
+  const assetPlatformLines = Object.entries(phase2b.assetsByPlatform).map(([k, v]) => `- **${escapePipes(k)}:** ${v}`);
+  const phase2cMethodLines = Object.entries(phase2c.methodCounts).map(
+    ([k, v]) => `- **${escapePipes(k)}:** ${v}`,
+  );
+  const phase2cTemplateLines = Object.entries(phase2c.templateCounts).map(
+    ([k, v]) => `- **${escapePipes(k)}:** ${v}`,
+  );
+  const phase2dPolishedLines = Object.entries(phase2d.polishedTemplateCounts).map(
+    ([k, v]) => `- **${escapePipes(k)}:** ${v}`,
+  );
+
+  const headlineSampleRows = headlineTel.linkedinRows
+    .map((row) => `| Day ${row.day} | ${escapePipes(row.channel_post_format ?? "-")} | ${escapePipes(row.headline)} |`)
+    .join("\n");
+
+  return [
+    "## LinkedIn Channel Intelligence",
+    "",
+    `_Orbit layered **LinkedIn-native channel intelligence** (${escapePipes(li.company_name)}) so drafts and visuals target real feed semantics instead of generic SaaS cadence._`,
+    "",
+    `- **profile_id:** \`${escapePipes(li.profile_id)}\``,
+    `- **source_mode:** ${li.source_mode}`,
+    "",
+    "### Visual profile (summary)",
+    "",
+    escapePipes(li.visual_profile.summary),
+    "",
+    "### Voice profile (summary)",
+    "",
+    escapePipes(li.voice_profile.summary),
+    "",
+    "### Post format patterns",
+    "",
+    formatRows,
+    "",
+    "### Anti-generic rules",
+    "",
+    antiRows,
+    "",
+    "### Execution telemetry",
+    "",
+    `- **LinkedIn drafts using the playbook:** ${draftsUsingPlaybook.length} / ${workflow.campaign_execution_drafts.length}`,
+    `- **Generated assets with channel visual metadata:** ${assetHits} / ${workflow.generated_campaign_assets.length}`,
+    `- **Drafts with channel_post_format set:** ${headlineTel.draftsWithChannelPostFormat} / ${headlineTel.linkedinRows.length}`,
+    `- **Drafts with channel_style_match_reason:** ${headlineTel.draftsWithChannelStyleReason} / ${workflow.campaign_execution_drafts.length}`,
+    `- **Calendar-generic headline signals detected:** ${headlineTel.calendarGenericHeadlineCount} (Day N crumbs / internal worksheet labels — target 0 after Phase 2 normalization)`,
+    `- **Distinct headline prefix buckets:** ${headlineTel.distinctHeadlineBuckets} / ${headlineTel.linkedinRows.length}`,
+    `- **Banned playbook phrase occurrences (headline+body scans):** ${bannedPhraseOccurrences}`,
+    "",
+    "### Phase 2b — visual hardening telemetry",
+    "",
+    `- **channel_profile_id / visual_profile_id:** \`${escapePipes(phase2b.channelProfileId ?? "—")}\``,
+    `- **Robot-risk term hits (prompt + negative scans):** ${phase2b.robotRiskTermCount}`,
+    `- **Generic on-image phrase hits:** ${phase2b.genericOnImagePhraseCount}`,
+    `- **Awkward headline signals (playbook-specific scan):** ${phase2b.awkwardHeadlineCount}`,
+    "",
+    "### Phase 2C — deterministic LinkedIn rendering telemetry",
+    "",
+    `- **Placeholder motif assets:** ${phase2c.placeholderCount} (path contains placeholder-brand-motif)`,
+    `- **LinkedIn deterministic SVG templates rendered:** ${phase2c.linkedInDeterministicCount}`,
+    `- **Risky numeric tokens detected on deterministic cards (regex QA hint):** ${phase2c.deterministicRiskyNumericTokenCount}`,
+    "",
+    "### Phase 2D — Heidi deterministic card renderer polish",
+    "",
+    `- **Deterministic LinkedIn cards (Heidi SVG path):** ${phase2d.deterministicCardsRendered}`,
+    `- **Render warning entries (sum across assets):** ${phase2d.renderWarningsTotal}`,
+    `- **Assets flagging internal-phrase telemetry scan:** ${phase2d.internalPhraseLeakHits}`,
+    `- **Risky numeric token hits (visible-copy scan):** ${phase2d.unsupportedNumericHints}`,
+    `- **Overflow-safe layout:** bounded word-wrap + vertical max-bottom boxes in SVG templates (deterministic fit)`,
+    "",
+    "**Polished template_id counts (Phase 2D groups)**",
+    "",
+    ...(phase2dPolishedLines.length ? phase2dPolishedLines : ["- _None classified._"]),
+    "",
+    "### Phase 2E — LinkedIn Playbook Image Model",
+    "",
+    `- **ORBIT_LINKEDIN_VISUAL_RENDER_MODE (env at report generation):** \`${escapePipes(phase2e.renderModeEnv)}\``,
+    `- **playbook_markdown_path:** \`${escapePipes(phase2e.playbookMarkdownPath)}\``,
+    `- **OPENAI_IMAGE_MODEL requested:** \`${escapePipes(phase2e.imageModelRequested)}\``,
+    `- **Image model(s) recorded on assets:** ${
+      phase2e.imageModelsUsed.length ? phase2e.imageModelsUsed.map((m) => `\`${escapePipes(m)}\``).join(", ") : "_None recorded._"
+    }`,
+    `- **Assets with openai_image_fallback_used:** ${phase2e.fallbackUsedCount}`,
+    `- **Playbook-driven OpenAI LinkedIn assets:** ${phase2e.playbookDrivenAssetCount}`,
+    `- **Deterministic SVG LinkedIn assets:** ${phase2e.deterministicLinkedInAssetCount}`,
+    `- **Other OpenAI LinkedIn assets (standard path):** ${phase2e.otherOpenAiLinkedInCount}`,
+    `- **Playbook violation prompt hints (long-paragraph language in prompt):** ${phase2e.playbookViolationPromptHints}`,
+    `- **Risky numeric tokens in visible_text_contract (regex count):** ${phase2e.unsupportedNumericVisibleTokenCount}`,
+    "",
+    "### Phase 2F — Distilled LinkedIn image-model brief (no full MD injection)",
+    "",
+    `- **ORBIT_LINKEDIN_VISUAL_RENDER_MODE (env at report generation):** \`${escapePipes(phase2f.renderModeEnv)}\``,
+    `- **OPENAI_IMAGE_MODEL requested:** \`${escapePipes(phase2f.imageModelRequested)}\``,
+    `- **Image model(s) recorded on LinkedIn assets:** ${
+      phase2f.imageModelsUsed.length ? phase2f.imageModelsUsed.map((m) => `\`${escapePipes(m)}\``).join(", ") : "_None recorded._"
+    }`,
+    `- **Assets with openai_image_fallback_used (LinkedIn scans):** ${phase2f.fallbackUsedCount}`,
+    `- **Playbook-aligned distilled GPT LinkedIn assets:** ${phase2f.playbookDistilledAssetCount}`,
+    `- **Legacy full playbook MD injected into prompt (SOURCE OF TRUTH marker):** ${phase2f.fullMdInjectedAssetCount}`,
+    `- **Phase 2F distilled brief marker hits in prompts:** ${phase2f.distilledBriefMarkerAssetCount}`,
+    `- **Explicit avoid-black/dark luxury cues in prompts:** ${phase2f.promptsAvoidDarkBackgroundExplicitCount}`,
+    `- **Suspicious positive dark-background phrasing (lexical heuristic):** ${phase2f.suspiciousDarkBackgroundLexicalHits}`,
+    `- **Risky numeric tokens in visible_text_contract (regex):** ${phase2f.unsupportedNumericVisibleTokenCount}`,
+    `- **Distilled positive brief excerpt:** _${escapePipes(phase2f.distilledBriefSnippet)}…_`,
+    "",
+    "**Visible text contract examples (playbook-driven)**",
+    "",
+    ...(phase2eContractLines.length ? phase2eContractLines : ["- _None._"]),
+    "",
+    "**Rendering methods (generated_campaign_assets)**",
+    "",
+    ...(phase2cMethodLines.length ? phase2cMethodLines : ["- _None classified._"]),
+    "",
+    "**template_id counts (deterministic paths)**",
+    "",
+    ...(phase2cTemplateLines.length ? phase2cTemplateLines : ["- _No template ids recorded._"]),
+    "",
+    ...(li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+      [
+        "_Heidi defaults to **deterministic SVG templates** when `ORBIT_LINKEDIN_VISUAL_RENDER_MODE` is unset or `deterministic`. Set **`ORBIT_LINKEDIN_VISUAL_RENDER_MODE=image_model`** for **GPT raster LinkedIn cards**. Phase **2F** routes those prompts through a **distilled visual brief** (full playbook Markdown stays documentation/report context — not pasted into image prompts)._",
+        "",
+      ]
+    : []),
+    "**Assets by platform**",
+    "",
+    ...(assetPlatformLines.length ? assetPlatformLines : ["- _No generated assets._"]),
+    "",
+    "**Sample visual_style_notes**",
+    "",
+    ...(phase2b.sampleVisualStyleReasons.length > 0 ?
+      phase2b.sampleVisualStyleReasons.map((r) => `- ${escapePipes(r)}`)
+    : ["- _None recorded._"]),
+    "",
+    ...(li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+      [
+        "### Heidi playbook summary (seeded)",
+        "",
+        "_Composition cues summarized from brand-visible references — not live-scraped posts._",
+        "",
+        `- **Voice:** ${escapePipes(li.voice_profile.summary)}`,
+        `- **Visual:** ${escapePipes(li.visual_profile.summary)}`,
+        `- **Approved on-image franchises (short):** ${escapePipes(li.visual_profile.approved_on_image_text_motifs?.join(", ") ?? "—")}`,
+        `- **Hard negatives:** ${escapePipes(li.visual_profile.image_generation_negative_rules?.join(" ") ?? "—")}`,
+        "",
+      ]
+    : []),
+    "### Phase 2 — headline telemetry",
+    "",
+    "| Day | channel_post_format | Public headline |",
+    "| --- | --- | --- |",
+    headlineSampleRows || "| - | - | _No LinkedIn drafts._ |",
+    "",
+    "**Sample style match reasons**",
+    "",
+    ...(sampleReasons.length > 0 ? sampleReasons.map((r) => `- ${escapePipes(r)}`) : ["- _No style match reasons recorded on drafts yet._"]),
+    "",
+    "### Manager critique — channel fit",
+    "",
+    ...(channelFitCritiques.length > 0 ?
+      channelFitCritiques.slice(0, 10).map((c) => {
+        const excerpt =
+          c.critique.length > 320 ? `${escapePipes(c.critique.slice(0, 317))}…` : escapePipes(c.critique);
+        return `- **${c.stance}** (${escapePipes(c.reasonCodes.join(", ") || "codes")}): ${excerpt}`;
+      })
+    : ["- _No explicit channel-fit critiques (playbook-aligned approvals)._"]),
+    "",
+  ].join("\n");
 }
 
 function buildManagerCritiqueLoopSection(

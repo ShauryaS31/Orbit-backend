@@ -1,6 +1,8 @@
 import type {
   CampaignCarouselDraft,
   CampaignExecutionDraft,
+  CampaignLinkedInPostDraft,
+  GeneratedCampaignAsset,
   GovernanceAuditEntry,
   LyraWarmIntelligence,
   ManagerContentIssue,
@@ -9,7 +11,23 @@ import type {
   ManagerCritiqueReasonCode,
   ProductMarketingContext,
   TrendScoutResult,
+  WorkflowState,
 } from "@/lib/types/orbit";
+import { isLyraCompanyUrl } from "@/lib/data/lyra-brand-intelligence";
+import {
+  collectBannedOnImagePhraseHits,
+  countRobotRiskMatches,
+  DEFAULT_GENERIC_ON_IMAGE_COPY_PHRASES,
+  headlineAlignedWithLinkedInPostFormat,
+  HEIDI_AI_LINKEDIN_PLAYBOOK_ID,
+  RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID,
+  isAwkwardRelevancePublicHeadline,
+  isCalendarGenericLinkedInHeadline,
+} from "@/lib/services/channel-intelligence";
+import {
+  buildTrustedEvidenceBlob,
+  extractRiskyNumericClaims,
+} from "@/lib/services/linkedin-card-renderer";
 import { createGovernanceEntry } from "@/lib/services/governance-logger";
 
 const GENERIC_PHRASES = [
@@ -67,7 +85,12 @@ function severityPenalty(sev: ManagerContentIssue["severity"]): number {
 
 function decideFromIssues(score: number, issues: ManagerContentIssue[]): "approve" | "revise" {
   const hasHigh = issues.some((i) => i.severity === "high");
-  if (hasHigh || score < 75) return "revise";
+  const channelDeterministicBlock = issues.some(
+    (i) =>
+      (i.severity === "high" || i.severity === "medium") &&
+      /\[(channel-visual|channel-intelligence|brand-guardrail)\]/i.test(i.note),
+  );
+  if (hasHigh || channelDeterministicBlock || score < 75) return "revise";
   return "approve";
 }
 
@@ -75,6 +98,8 @@ function decideFromIssues(score: number, issues: ManagerContentIssue[]): "approv
 const ISSUE_TYPE_REVISION_HINT: Partial<Record<ManagerContentIssue["type"], string>> = {
   too_close_to_reference: "reduce repeated source-anchor phrasing; keep anchors as citations, not pasted prose",
   generic_copy: "replace generic AI filler with concrete founder/operator language",
+  generic_channel_fit:
+    "rewrite using the active company's voice and seeded playbook — fix headlines/email signoffs; remove unrelated demo brands (Lyra / Relevance AI / Heidi) unless this workflow is explicitly that brand; drop generic SaaS tone and banned phrases",
   unsupported_claim: "remove or qualify metrics and superlatives against approved proof context only",
   wrong_channel_voice: "tune hook and proof cues to this channel’s audience expectations",
   weak_cta: "strengthen the CTA with a decisive next step aligned to positioning",
@@ -138,6 +163,9 @@ function mapIssuesToReasonCodes(issues: ManagerContentIssue[]): ManagerCritiqueR
         out.add("too_close_to_reference");
         break;
       case "generic_copy":
+        out.add("generic_channel_fit");
+        break;
+      case "generic_channel_fit":
         out.add("generic_channel_fit");
         break;
       case "unsupported_claim":
@@ -890,6 +918,491 @@ function summarizeTopReasonCodes(critiques: ManagerCritique[], limit = 6): strin
     .slice(0, limit)
     .map(([k, v]) => `${k}×${v}`)
     .join(", ") || "none";
+}
+
+/**
+ * Deterministic checks against seeded LinkedIn Channel Intelligence (dynamic workflow overlay).
+ */
+export function collectLinkedInChannelIntelligenceIssues(
+  workflow: WorkflowState,
+  draft: CampaignExecutionDraft,
+): ManagerContentIssue[] {
+  const li = workflow.channel_intelligence?.linkedin;
+  if (!li || draft.type !== "linkedin_post") return [];
+
+  const linked = draft as CampaignLinkedInPostDraft;
+  const headline = linked.headline ?? "";
+  const body = linked.body ?? "";
+  const combined = `${headline}\n${body}`.toLowerCase();
+  const issues: ManagerContentIssue[] = [];
+
+  const banned = new Set(
+    [...li.generation_rules.banned_phrases.map((p) => p.toLowerCase()), ...GENERIC_PHRASES.map((p) => p.toLowerCase())].filter(
+      Boolean,
+    ),
+  );
+  for (const phrase of banned) {
+    if (phrase.length >= 4 && combined.includes(phrase)) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "high",
+        note: `Banned or off-playbook phrase detected for ${li.company_name} LinkedIn voice: "${phrase}".`,
+      });
+      break;
+    }
+  }
+
+  if (li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID && isCalendarGenericLinkedInHeadline(headline, li)) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note:
+        "Headline reads like internal campaign scaffolding (Kickoff Post, Announcement, Thought Leadership, Live Event Announcement, etc.). Use Level Up, Relevance Live, Agents@Work, AI Ops Bootcamp, AI workforce, or GTM operator framing per channel_post_format.",
+    });
+  }
+
+  if (li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID && isAwkwardRelevancePublicHeadline(headline)) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note:
+        'LinkedIn headline contains forbidden awkward scaffolding (Day N prefixes, “Build Join…”, Final Call, Feedback Request). Normalize using playbook shells — never paste calendar/recap crumbs publicly.',
+    });
+  }
+
+  const fmt = linked.meta.channel_post_format;
+  if (
+    fmt &&
+    li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID &&
+    !headlineAlignedWithLinkedInPostFormat(headline, fmt)
+  ) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "medium",
+      note: `Headline energy does not match assigned channel_post_format "${fmt}". Align hook to that playbook tile.`,
+    });
+  }
+
+  const excitedOpens = (body.match(/\bwe(?:'|’)re excited\b/gi) ?? []).length;
+  if (excitedOpens >= 2) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "low",
+      note:
+        "Body overuses “we're excited” openings — vary hooks with proof-led or operator-tension opens per playbook caption_rules.",
+    });
+  }
+
+  if (li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID) {
+    const vocabHits = li.voice_profile.vocabulary.filter((v) => combined.includes(v.toLowerCase()));
+    if (body.length > 140 && vocabHits.length === 0) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "medium",
+        note:
+          "LinkedIn body lacks seeded channel vocabulary (e.g. AI workforce, agents, GTM operators, Level Up / Relevance Live motifs). Rewrite with playbook cues.",
+      });
+    }
+  }
+
+  if (li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID) {
+    const clinicalHints = ["clinician", "clinical", "documentation", "patient", "care", "capacity", "paperwork", "burnout"];
+    const hits = clinicalHints.filter((w) => combined.includes(w));
+    if (body.length > 160 && hits.length === 0) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "medium",
+        note:
+          "Heidi LinkedIn body lacks clinical-operator vocabulary (clinicians, documentation, patient care, capacity, paperwork, burnout). Ground copy in healthcare proof.",
+      });
+    }
+    if (
+      fmt &&
+      !headlineAlignedWithLinkedInPostFormat(headline, fmt)
+    ) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "medium",
+        note: `Headline energy does not match assigned Heidi channel_post_format "${fmt}". Align to editorial proof/partnership/report-card rhythm.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function workflowAllowsLyraContent(workflow: WorkflowState): boolean {
+  return Boolean(workflow.lyra_warm_intelligence) || isLyraCompanyUrl(workflow.company_url);
+}
+
+function workflowAllowsHeidiBrand(workflow: WorkflowState): boolean {
+  const cn = workflow.website_intelligence?.company_name?.toLowerCase() ?? "";
+  const url = workflow.company_url.toLowerCase();
+  return (
+    workflow.channel_intelligence?.linkedin?.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ||
+    url.includes("heidi") ||
+    cn.includes("heidi")
+  );
+}
+
+function workflowAllowsRelevanceBrand(workflow: WorkflowState): boolean {
+  const blob = `${workflow.company_url} ${workflow.website_intelligence?.company_name ?? ""}`.toLowerCase();
+  return (
+    workflow.channel_intelligence?.linkedin?.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID ||
+    blob.includes("relevanceai") ||
+    blob.includes("relevance ai")
+  );
+}
+
+function draftVisibleLeakageBlob(draft: CampaignExecutionDraft): string {
+  const chunks: string[] = [];
+  if ("headline" in draft && draft.headline) chunks.push(String(draft.headline));
+  if ("body" in draft && draft.body) chunks.push(String(draft.body));
+  if ("body_markdown" in draft && draft.body_markdown) chunks.push(String(draft.body_markdown));
+  if ("subject_line" in draft && draft.subject_line) chunks.push(String(draft.subject_line));
+  if ("preview_text" in draft && draft.preview_text) chunks.push(String(draft.preview_text));
+  if ("caption" in draft && draft.caption) chunks.push(String(draft.caption));
+  if (draft.type === "email" && draft.meta.email_detail?.full_email) chunks.push(String(draft.meta.email_detail.full_email));
+  if (draft.meta.manager_review?.revisionInstruction) chunks.push(String(draft.meta.manager_review.revisionInstruction));
+  return chunks.join("\n");
+}
+
+/** Blocks accidental demo-brand bleed (Lyra / Relevance / Heidi) into unrelated workflows. */
+export function collectCrossCompanyBrandLeakageIssues(
+  workflow: WorkflowState,
+  draft: CampaignExecutionDraft,
+): ManagerContentIssue[] {
+  const blob = draftVisibleLeakageBlob(draft);
+  if (!blob.trim()) return [];
+
+  const issues: ManagerContentIssue[] = [];
+  const companyHint =
+    workflow.website_intelligence?.company_name ?? workflow.brand_kit?.brand_name ?? "this workflow's company";
+
+  if (!workflowAllowsLyraContent(workflow) && /\blyra\b/i.test(blob)) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note: `Cross-company leakage: visible copy references "Lyra" but this workflow is not the Lyra demo brand. Replace signatures/sender lines with "${companyHint}", manager "Scott", or "The ${companyHint} team".`,
+    });
+  }
+
+  if (!workflowAllowsRelevanceBrand(workflow) && /\brelevance\s*ai\b|\brelevanceai\b/i.test(blob)) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note: `Cross-company leakage: copy references Relevance AI off-brand for ${companyHint}. Remove Relevance-specific naming unless this workflow is seeded for Relevance AI.`,
+    });
+  }
+
+  if (!workflowAllowsHeidiBrand(workflow) && /\bheidi\b/i.test(blob)) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note: `Cross-company leakage: copy references Heidi off-brand for ${companyHint}. Remove Heidi-specific naming unless this workflow is Heidi-branded.`,
+    });
+  }
+
+  return issues;
+}
+
+/** Merges channel-intelligence issues into Scott's LLM review and may downgrade score / force revise. */
+export function augmentManagerReviewWithChannelIntelligence(
+  review: ManagerContentReview,
+  draft: CampaignExecutionDraft,
+  workflow: WorkflowState,
+): ManagerContentReview {
+  const taggedLinkedIn = collectLinkedInChannelIntelligenceIssues(workflow, draft).map((i) => ({
+    ...i,
+    note: `[channel-intelligence] ${i.note}`,
+  }));
+  const taggedBrand = collectCrossCompanyBrandLeakageIssues(workflow, draft).map((i) => ({
+    ...i,
+    note: `[brand-guardrail] ${i.note}`,
+  }));
+  const extra = [...taggedLinkedIn, ...taggedBrand];
+  if (extra.length === 0) return review;
+
+  return mergeExtraIssuesIntoReview(review, extra);
+}
+
+/** Appends deterministic issues (e.g. visual brief checks) and recomputes score / decision. */
+export function appendIssuesToManagerReview(
+  review: ManagerContentReview,
+  extra: ManagerContentIssue[],
+): ManagerContentReview {
+  if (extra.length === 0) return review;
+  const tagged = extra.map((i) => ({ ...i, note: `[channel-visual] ${i.note}` }));
+  return mergeExtraIssuesIntoReview(review, tagged);
+}
+
+function mergeExtraIssuesIntoReview(review: ManagerContentReview, taggedExtra: ManagerContentIssue[]): ManagerContentReview {
+  const mergedIssues = [...review.issues, ...taggedExtra];
+  let score = review.score;
+  for (const i of taggedExtra) score -= severityPenalty(i.severity);
+  score = clampScore(score);
+  const decision = decideFromIssues(score, mergedIssues);
+
+  return {
+    ...review,
+    decision,
+    score,
+    issues: mergedIssues,
+    ...(decision === "revise" ?
+      {
+        revisionInstruction: buildRevisionInstruction(
+          { ...review, decision: "revise", issues: mergedIssues, score },
+          {},
+        ),
+      }
+    : { revisionInstruction: review.revisionInstruction }),
+  };
+}
+
+/** Merges QA issues without `[channel-visual]` prefix (e.g. deterministic card numeric grounding). */
+export function appendPlainIssuesToManagerReview(
+  review: ManagerContentReview,
+  extra: ManagerContentIssue[],
+): ManagerContentReview {
+  return mergeExtraIssuesIntoReview(review, extra);
+}
+
+function normalizedEvidenceIncludes(fragment: string, haystack: string): boolean {
+  const f = fragment.trim().toLowerCase().replace(/\s+/g, " ");
+  const h = haystack.trim().toLowerCase().replace(/\s+/g, " ");
+  return f.length >= 2 && h.includes(f);
+}
+
+/** Flatten Phase 2D JSON card copy or legacy plain strings for QA scans. */
+function flattenDeterministicVisibleCopyForScan(raw: string): string {
+  const t = raw.trim();
+  if (!t.startsWith("{")) return raw;
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>;
+    return Object.values(o)
+      .filter((v): v is string => typeof v === "string")
+      .join("\n");
+  } catch {
+    return raw;
+  }
+}
+
+/** Flags numeric claims rendered onto Heidi deterministic cards that are not grounded in trusted workflow evidence. */
+export function collectDeterministicHeidiUnsupportedNumericIssues(
+  deterministicVisibleCopy: string,
+  workflow: WorkflowState,
+  draft: CampaignExecutionDraft,
+): ManagerContentIssue[] {
+  const li = workflow.channel_intelligence?.linkedin;
+  if (li?.profile_id !== HEIDI_AI_LINKEDIN_PLAYBOOK_ID || draft.type !== "linkedin_post") return [];
+
+  const trusted = buildTrustedEvidenceBlob(workflow, draft);
+  const scanText = flattenDeterministicVisibleCopyForScan(deterministicVisibleCopy);
+  const risks = extractRiskyNumericClaims(scanText);
+  const issues: ManagerContentIssue[] = [];
+  for (const token of risks) {
+    if (!normalizedEvidenceIncludes(token, trusted)) {
+      issues.push({
+        type: "unsupported_claim",
+        severity: "high",
+        note: `Deterministic Heidi card contains numeric/stat fragment "${token}" that is not grounded in extracted workflow evidence — replace with qualitative proof language.`,
+      });
+    }
+  }
+
+  const lowerCopy = scanText.toLowerCase();
+  const relevancePositive = /\b(purple|pixel|arcade|neon|sci[- ]fi|relevance\s*ai)\b/i.test(lowerCopy);
+  if (relevancePositive) {
+    issues.push({
+      type: "generic_channel_fit",
+      severity: "high",
+      note:
+        "Deterministic Heidi card copy references Relevance/sci‑fi visual vocabulary — remove; use butter yellow / cream / burgundy editorial language only.",
+    });
+  }
+
+  return issues;
+}
+
+/** Phase 2E — playbook-driven GPT LinkedIn image QA (visible contract length, cross-brand drift, paragraph asks). */
+export function collectPlaybookLinkedInImageAssetIssues(
+  workflow: WorkflowState,
+  asset: GeneratedCampaignAsset,
+  draft: CampaignExecutionDraft,
+): ManagerContentIssue[] {
+  if (!asset.playbook_driven || asset.platform !== "linkedin" || draft.type !== "linkedin_post") return [];
+
+  const issues: ManagerContentIssue[] = [];
+  const li = workflow.channel_intelligence?.linkedin;
+  const promptBlob = `${asset.prompt}\n${asset.image_prompt_detailed ?? ""}\n${asset.negative_prompt ?? ""}`;
+
+  if (/\blong\s+paragraph|wall\s+of\s+text|render\s+(?:a\s+)?full\s+paragraph/i.test(asset.prompt)) {
+    issues.push({
+      type: "weak_channel_format",
+      severity: "medium",
+      note:
+        "[channel-visual] Playbook image prompt asks for long on-image paragraphs — visible copy must stay within the provided contract only.",
+    });
+  }
+
+  if (asset.visible_text_contract) {
+    let headline = "";
+    try {
+      const o = JSON.parse(asset.visible_text_contract) as { headline?: string; label?: string };
+      headline = o.headline ?? "";
+      if (headline.split(/\s+/).filter(Boolean).length > 10) {
+        issues.push({
+          type: "weak_channel_format",
+          severity: "medium",
+          note: "[channel-visual] visible_text_contract headline exceeds short on-image target (~8 words).",
+        });
+      }
+    } catch {
+      /* ignore malformed JSON */
+    }
+    const trusted = buildTrustedEvidenceBlob(workflow, draft as CampaignLinkedInPostDraft);
+    for (const token of extractRiskyNumericClaims(asset.visible_text_contract)) {
+      if (!trusted.toLowerCase().includes(token.toLowerCase().trim())) {
+        issues.push({
+          type: "unsupported_claim",
+          severity: "high",
+          note: `Playbook visible text includes "${token}" — not clearly grounded in extracted workflow evidence.`,
+        });
+      }
+    }
+  }
+
+  if (li?.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID) {
+    if (/\b(level\s*up|relevance\s*live|pixel-?art|arcade\s+marquee|violet\s+pixel\s+world)\b/i.test(promptBlob)) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "high",
+        note:
+          "[channel-visual] Heidi playbook image prompt includes Relevance/arcade/pixel-forward motifs — keep Heidi yellow/cream/burgundy editorial direction.",
+      });
+    }
+  }
+
+  if (li?.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID) {
+    if (/\b(butter\s*yellow|heidi\s+loop|clinical\s+report\s+card|pale\s+lemon\s+yellow\s+field)\b/i.test(promptBlob)) {
+      issues.push({
+        type: "generic_channel_fit",
+        severity: "high",
+        note:
+          "[channel-visual] Relevance playbook image prompt drifts toward Heidi clinical editorial cues — use purple/pixel/arcade/event energy per playbook.",
+      });
+    }
+  }
+
+  return issues;
+}
+
+/** Flags LinkedIn visual prompts that drift off seeded Channel Intelligence (Phase 2b). */
+export function collectLinkedInVisualPromptIssues(
+  workflow: WorkflowState,
+  prompt: string,
+  negativePrompt: string,
+  opts?: { skipHeidiGptVisualCueCheck?: boolean },
+): ManagerContentIssue[] {
+  const li = workflow.channel_intelligence?.linkedin;
+  if (!li) return [];
+
+  const combined = `${prompt}\n${negativePrompt}`;
+  const lowerP = prompt.toLowerCase();
+  const lowerN = negativePrompt.toLowerCase();
+  const issues: ManagerContentIssue[] = [];
+
+  const robotHits = countRobotRiskMatches(combined);
+  if (robotHits > 0) {
+    issues.push({
+      type: "weak_channel_format",
+      severity: "high",
+      note: `Robot/mech/android drift in visual brief (${robotHits} signal${robotHits === 1 ? "" : "s"}) — remove humanoid robots, mascots, power armor, mech suits, cybernetic chrome agents.`,
+    });
+  }
+
+  const bannedOnImage = [
+    ...(li.generation_rules.banned_on_image_copy_phrases ?? []),
+    ...DEFAULT_GENERIC_ON_IMAGE_COPY_PHRASES,
+  ];
+  const prodHits = collectBannedOnImagePhraseHits(prompt, bannedOnImage);
+  if (prodHits.length > 0) {
+    issues.push({
+      type: "weak_channel_format",
+      severity: "medium",
+      note: `Generic productivity/on-image SaaS clichés detected in prompt: ${prodHits.slice(0, 5).join(", ")}.`,
+    });
+  }
+
+  if (li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID) {
+    const playbookCue =
+      /\b(purple|violet|magenta|lavender|pixel|arcade|neon|navy|level\s+up|relevance\s+live|agents@work|bootcamp|community|live\s+agent)\b/i.test(
+        prompt,
+      );
+    if (!playbookCue) {
+      issues.push({
+        type: "weak_channel_format",
+        severity: "medium",
+        note:
+          "Relevance visual brief lacks native cues (purple/violet/magenta/lavender palette, pixel-art human operators or arcade typography, Level Up / Relevance Live / live-agent community framing).",
+      });
+    }
+    if (
+      /\b(butter\s+yellow|pale\s+yellow|burgundy\s+serif|report[- ]card\s+editorial|cream\s+institutional\s+card)\b/i.test(
+        lowerP,
+      )
+    ) {
+      issues.push({
+        type: "weak_channel_format",
+        severity: "medium",
+        note:
+          "Relevance LinkedIn brief reads Heidi-yellow/editorial — restore purple/pixel/arcade-native world per playbook.",
+      });
+    }
+  }
+
+  if (li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID) {
+    if (!opts?.skipHeidiGptVisualCueCheck) {
+      const heidiCue =
+        /\b(pale\s+yellow|butter\s+yellow|cream|off[- ]white|burgundy|dark\s+brown|serif|report[- ]card|healthcare|clinical|documentation|partnership\s+announcement|deterministic\s+heidi)\b/i.test(
+          prompt,
+        );
+      if (!heidiCue) {
+        issues.push({
+          type: "weak_channel_format",
+          severity: "medium",
+          note:
+            "Heidi brief lacks editorial cues (pale/butter yellow, cream/off-white, burgundy serif type, report-card/partnership/proof layouts, healthcare/clinical/documentation language).",
+        });
+      }
+    }
+    if (!opts?.skipHeidiGptVisualCueCheck) {
+      if (
+        /\b(purple|violet|magenta|lavender|pixel|arcade|neon|sci[- ]fi|cyber|mech|robot)\b/i.test(lowerP)
+      ) {
+        issues.push({
+          type: "weak_channel_format",
+          severity: "high",
+          note:
+            "Heidi LinkedIn brief contains Relevance/sci‑fi bleed (purple/pixel/arcade/neon/robot vocabulary) — use butter/cream/burgundy institutional editorial only.",
+        });
+      }
+    }
+  }
+
+  const negativeCoverage = [/robot|android|mech|armor/, /stock/, /gradient|saas/, /neon|sci|pixel|arcade/, /brain/].filter(
+    (re) => re.test(lowerN),
+  ).length;
+  if (negativeCoverage < 3) {
+    issues.push({
+      type: "weak_channel_format",
+      severity: "low",
+      note:
+        "Negative prompt should reinforce rejecting robots/mech, stock photography, generic SaaS gradients, neon/pixel/arcade drift (profile-dependent), and vague AI brains.",
+    });
+  }
+
+  return issues;
 }
 
 export function applyManagerContentReviews(

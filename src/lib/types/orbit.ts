@@ -91,6 +91,7 @@ export type DraftStatus =
 export type ManagerContentIssueType =
   | "too_close_to_reference"
   | "generic_copy"
+  | "generic_channel_fit"
   | "unsupported_claim"
   | "wrong_channel_voice"
   | "weak_cta"
@@ -195,6 +196,101 @@ export interface TrendScoutResult {
   sources: TrendSource[];
   notes?: string[];
   error_summary?: string;
+}
+
+/** Source provenance for channel-native intelligence (Phase — LinkedIn Channel Intelligence). */
+export type ChannelIntelligenceSourceMode =
+  | "seeded"
+  | "uploaded"
+  | "browser_captured"
+  | "api";
+
+export interface ChannelIntelligenceSource {
+  mode: ChannelIntelligenceSourceMode;
+  label: string;
+  detail?: string;
+}
+
+/** Structured caption/opening patterns — style reference only, not for verbatim copy. */
+export interface LinkedInPostFormatPattern {
+  id: string;
+  label: string;
+  description: string;
+  /** Example rhythm for the model; must be paraphrased, not copied. */
+  caption_cadence_hint: string;
+  /** Suggested visual card type from the channel playbook. */
+  visual_card_type: string;
+}
+
+export interface LinkedInVoiceProfile {
+  summary: string;
+  tone_markers: string[];
+  vocabulary: string[];
+  opening_cadence_examples: string[];
+  audience: string;
+}
+
+export interface LinkedInVisualProfile {
+  summary: string;
+  palette: string[];
+  motifs: string[];
+  typography_style: string[];
+  scene_types: string[];
+  avoid_visuals: string[];
+  /** Strong image-generation negatives merged into LinkedIn hero briefs (Phase 2b). */
+  image_generation_negative_rules?: string[];
+  /** Short approved on-image franchise phrases (illustrative text only when on-brand). */
+  approved_on_image_text_motifs?: string[];
+}
+
+export interface LinkedInGenerationRules {
+  headline_rules: string[];
+  body_rules: string[];
+  banned_phrases: string[];
+  /** LinkedIn caption/body doctrine (Phase 2 — native feed voice). */
+  caption_rules?: string[];
+  /** Guidance for rotating playbook formats across a campaign sequence. */
+  format_rotation_rules?: string[];
+  /** Labels/patterns that must not appear in public headlines (calendar SaaS crumbs). */
+  forbidden_public_headline_patterns?: string[];
+  /** Phrases that must not appear as readable on-image copy in generated LinkedIn heroes. */
+  banned_on_image_copy_phrases?: string[];
+}
+
+export interface LinkedInSourceExample {
+  id: string;
+  /** Paraphrased description — not an exact LinkedIn post mirror. */
+  description: string;
+  format_pattern_id: string;
+}
+
+/** Native LinkedIn channel playbook for on-brand posts and visuals (seeded per company). */
+export interface LinkedInChannelIntelligence {
+  profile_id: string;
+  company_name: string;
+  channel: "linkedin";
+  source_mode: ChannelIntelligenceSourceMode;
+  visual_profile: LinkedInVisualProfile;
+  voice_profile: LinkedInVoiceProfile;
+  post_format_patterns: LinkedInPostFormatPattern[];
+  generation_rules: LinkedInGenerationRules;
+  anti_generic_rules: string[];
+  anti_copy_rules: string[];
+  source_examples: LinkedInSourceExample[];
+  sources: ChannelIntelligenceSource[];
+  created_at: string;
+  updated_at: string;
+  /** Phase 2E — repo-relative path to Markdown playbook source. */
+  playbook_markdown_path?: string;
+  /** Phase 2E — compact summary derived from playbook MD (for prompts / report). */
+  playbook_summary?: string;
+  /** Phase 2E — extracted “Image Prompt Contract” section. */
+  image_prompt_contract?: string;
+}
+
+/** Optional structured intelligence keyed by surface — backward-compatible on WorkflowState. */
+export interface ChannelIntelligence {
+  linkedin?: LinkedInChannelIntelligence;
 }
 
 export interface MarketingWorkOrderRequest {
@@ -307,6 +403,14 @@ export interface DraftMetadata {
   trend_angle?: string;
   trend_sources?: TrendSource[];
   trend_selection_reason?: string;
+
+  /** LinkedIn Channel Intelligence — ties draft to seeded/native playbook metadata. */
+  channel_intelligence_profile_id?: string;
+  channel_style_match_reason?: string;
+  channel_visual_style_applied?: string;
+  channel_voice_rules_applied?: string;
+  channel_post_format?: string;
+  channel_originality_note?: string;
 }
 
 export interface WebsiteIntelligence {
@@ -538,8 +642,49 @@ export interface GeneratedCampaignAsset {
   negative_prompt?: string;
   visual_source_anchor?: string;
   visual_style_notes?: string;
-  visual_mode?: string;
+  /** Legacy GPT-image modes plus Phase 2C deterministic templates. */
+  visual_mode?:
+    | string
+    | "photo_real_editorial"
+    | "brand_graphic"
+    | "brand_template"
+    | "abstract_background";
+  /** How the raster was produced — backward compatible when omitted (treated as OpenAI image path). */
+  rendering_method?: "openai_image" | "deterministic_svg_template";
+  template_id?: string;
+  /** Repo-relative path such as `public/generated-images/<uuid>.jpg` when saved locally. */
+  local_path?: string;
+  /** Ground-truth copy rasterized onto deterministic Heidi cards (QA / telemetry). */
+  deterministic_visible_copy?: string;
+  /** Phase 2D — structured public card fields mirrored from deterministic SVG copy (snake_case for exports). */
+  deterministic_card_copy?: {
+    eyebrow?: string;
+    headline?: string;
+    proof_line?: string;
+    supporting_line?: string;
+    label?: string;
+    footer?: string;
+  };
+  /** Phase 2D — sanitizer / validator notices before rasterizing deterministic cards. */
+  deterministic_render_warnings?: string[];
   source_draft_id?: string;
+  channel_visual_profile_id?: string;
+  channel_visual_prompt_rule?: string;
+  channel_style_match_reason?: string;
+  /** Phase 2E — playbook source path when image was playbook-driven. */
+  playbook_markdown_path?: string;
+  /** Phase 2E — GPT image path aligned with company LinkedIn playbook / channel intelligence. */
+  playbook_driven?: boolean;
+  /** Phase 2F — full playbook Markdown body was not injected into this image prompt (distilled brief only). */
+  linkedin_image_full_md_injected?: boolean;
+  /** Phase 2E — JSON of headline/label/footer contract for on-image text. */
+  visible_text_contract?: string;
+  /** Phase 2E — OpenAI image model that produced the raster (if known). */
+  openai_image_model_used?: string;
+  /** Phase 2E — true if primary model failed and fallback was used. */
+  openai_image_fallback_used?: boolean;
+  /** When fallback_used is true — sanitized primary-model error from OpenAI (no secrets). */
+  openai_image_primary_failure_sanitized?: string;
   image_url: string;
   created_at: string;
 }
@@ -616,5 +761,7 @@ export interface WorkflowState {
   manager_critiques?: ManagerCritique[];
   /** Phase 7D — optional public-web trend enrichment (env gated; workflow remains resilient if skipped/failed). */
   trend_intelligence?: TrendScoutResult;
+  /** LinkedIn Channel Intelligence and future channel playbooks — optional, backward-compatible. */
+  channel_intelligence?: ChannelIntelligence;
   error_message?: string;
 }

@@ -1,7 +1,32 @@
 import OpenAI from "openai";
 
+import { isLyraCompanyUrl } from "@/lib/data/lyra-brand-intelligence";
+import {
+  buildLinkedInHeadlineRulesCompact,
+  buildLinkedInVisualRulesForPrompt,
+  buildLinkedInVoiceRulesForPrompt,
+  HEIDI_AI_LINKEDIN_PLAYBOOK_ID,
+  normalizeLinkedInHeadlineWithChannelIntelligence,
+  pickLinkedInPostFormatPattern,
+  RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID,
+  resolveChannelIntelligence,
+  summarizeLinkedInIntelligenceForPrompt,
+} from "@/lib/services/channel-intelligence";
+import {
+  appendIssuesToManagerReview,
+  appendPlainIssuesToManagerReview,
+  augmentManagerReviewWithChannelIntelligence,
+  collectDeterministicHeidiUnsupportedNumericIssues,
+  collectLinkedInVisualPromptIssues,
+  collectPlaybookLinkedInImageAssetIssues,
+} from "@/lib/services/manager-content-review";
 import { appendGovernanceLog, createGovernanceEntry } from "@/lib/services/governance-logger";
-import { generateBrandBackground } from "@/lib/services/image-generator";
+import { generateBrandBackground, generateOpenAiImageFromFullPrompt } from "@/lib/services/image-generator";
+import { renderHeidiDeterministicLinkedInCardForWorkflow } from "@/lib/services/linkedin-card-renderer";
+import {
+  buildPlaybookDrivenLinkedInImagePrompt,
+  buildSafeLinkedInVisibleTextContract,
+} from "@/lib/services/playbook-linkedin-image-prompt";
 import {
   formatManagerSkillBrief,
   formatReviewSkillBrief,
@@ -20,6 +45,7 @@ import type {
   ManagerSummaryReport,
   ManagerContentReview,
   ManagerCritique,
+  ManagerContentIssueType,
   ManagerCritiqueReasonCode,
   ManagerWorkflowStep,
   ProductMarketingContext,
@@ -83,6 +109,8 @@ interface PlanningConstraints {
   singleOutputRequested: boolean;
   forbidMultiDay: boolean;
   visualAssetsAreComponents: boolean;
+  /** True when operator notes imply N-day LinkedIn campaign cadence (schedule_day coverage). */
+  linkedin_multi_day_campaign: boolean;
 }
 
 interface AgentScopeContract {
@@ -128,7 +156,7 @@ interface ScottReview {
 }
 
 interface ManagerVisualBrief {
-  visual_mode: "photo_real_editorial";
+  visual_mode: "photo_real_editorial" | "brand_graphic";
   asset_purpose: "instagram_feed_image" | "linkedin_post_image";
   prompt: string;
   negative_prompt: string;
@@ -157,6 +185,26 @@ const GENERIC_MARKETING_PHRASES = [
   "i hope this message finds you well",
 ];
 
+const MANAGER_CONTENT_ISSUE_TYPES = new Set<string>([
+  "too_close_to_reference",
+  "generic_copy",
+  "generic_channel_fit",
+  "unsupported_claim",
+  "wrong_channel_voice",
+  "weak_cta",
+  "repetitive",
+  "reference_summary_not_synthesis",
+  "incomplete_email_draft",
+  "weak_channel_format",
+  "trend_context_ignored",
+]);
+
+function coerceManagerIssueType(raw: unknown): ManagerContentIssueType {
+  const t = String(raw ?? "").trim();
+  if (MANAGER_CONTENT_ISSUE_TYPES.has(t)) return t as ManagerContentIssueType;
+  return "generic_copy";
+}
+
 function resolvePositiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -177,6 +225,33 @@ function normalizeAgentModelLabel(value: string | undefined): string {
   if (lower === "gpt-5.5" || lower === "gpt-5.4" || lower === "gpt-4.1" || lower === "gpt-4o" || lower === "gpt-4o-mini" || lower === "o3-mini") return lower;
   if (lower === "gpt-4.1-mini") return "gpt-4.1-mini";
   return model.startsWith("GPT-") ? lower : model;
+}
+
+function linkedinExecutionAddon(workflow: WorkflowState, deliverable: DynamicDeliverable, deliverableIndex: number): string {
+  if (deliverable.channel !== "linkedin" || !workflow.channel_intelligence?.linkedin) return "";
+  const li = workflow.channel_intelligence.linkedin;
+  const pattern = pickLinkedInPostFormatPattern(li, deliverableIndex);
+  const headlineDoctrine = buildLinkedInHeadlineRulesCompact(li);
+  const franchiseHint =
+    li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+      "Shape headline + hook to match the assigned post_format_id with Heidi-native editorial rhythm (documentation burden, clinician capacity, patient-facing time, partnerships). Prefer motifs like Relief on the Record, calm proof stats, partnership cards — clinical vocabulary over hype."
+    : li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID ?
+      'Shape headline + hook to match the assigned post_format_id and rotate franchises across posts (Level Up, Relevance Live, Agents@Work, AI Ops Bootcamp, AI workforce, GTM operators).'
+    : "Shape headline + hook to match the assigned post_format_id and seeded playbook voice.";
+  return `\n\nLINKEDIN CHANNEL INTELLIGENCE (mandatory for this deliverable):\n${summarizeLinkedInIntelligenceForPrompt(li)}\n${buildLinkedInVoiceRulesForPrompt(li)}\nAssigned playbook post_format_id for THIS deliverable: "${pattern.id}" (${pattern.label}). Caption cadence hint: ${pattern.caption_cadence_hint}\nHeadline doctrine (follow): ${headlineDoctrine}\nThe JSON field "title" is the PUBLIC LinkedIn headline. Never start with Day 1:, Day 2:, etc. Never use Kickoff Post, Announcement, Thought Leadership Post, Engagement Post, Live Event Announcement, or other calendar worksheet labels.\n${franchiseHint}\nDo not stack repetitive "we're excited" openings. Paraphrase playbook examples — never copy hooks verbatim.`;
+}
+
+function linkedinReviewAddon(workflow: WorkflowState, deliverable: DynamicDeliverable, deliverableIndex: number): string {
+  if (deliverable.channel !== "linkedin" || !workflow.channel_intelligence?.linkedin) return "";
+  const li = workflow.channel_intelligence.linkedin;
+  const pattern = pickLinkedInPostFormatPattern(li, deliverableIndex);
+  const nativeHints =
+    li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+      "Reject purple/pixel/arcade motifs in copy cues; reward calm clinical proof and healthcare-operator specificity."
+    : li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID ?
+      "Reward Level Up / Relevance Live / Agents@Work / AI Ops Bootcamp native vocabulary when authentic."
+    : "Reward playbook-native vocabulary.";
+  return `\n\nLINKEDIN NATIVE REVIEW: Score against ${li.profile_id}. Assigned post_format_id: "${pattern.id}". Reject titles beginning with Day N: or containing internal calendar labels (Kickoff Post, Announcement, Thought Leadership, etc.). Headline + opener must match the playbook tile energy. Request revision when copy feels like generic AI SaaS or ignores banned phrases. ${nativeHints}`;
 }
 
 function getClient(): OpenAI {
@@ -347,11 +422,17 @@ function compactWorkflowContext(workflow: WorkflowState) {
   const intelligence = workflow.website_intelligence;
   const context = workflow.product_marketing_context;
   const roster = resolveAgentRoster(workflow);
+  const li = workflow.channel_intelligence?.linkedin;
+  const planning = inferPlanningConstraints(workflow);
   return {
     work_order: workflow.work_order ?? null,
     objective: workflow.business_goal ?? "",
     success_metric: workflow.success_metric ?? "",
     operator_scope_contract: buildAgentScopeContract(workflow),
+    planning_inference: {
+      inferred_operator_review_output_cap: planning.requestedOutputCount,
+      linkedin_multi_day_sequence: planning.linkedin_multi_day_campaign,
+    },
     brand_learning_notes: workflow.brand_learning_notes ?? [],
     agent_roster: roster.all.map((agent) => ({
       id: agent.id,
@@ -373,6 +454,17 @@ function compactWorkflowContext(workflow: WorkflowState) {
     },
     marketing_context: compactMarketingContext(context),
     warm_intelligence: compactWarmIntelligence(workflow),
+    linkedin_channel_intelligence:
+      li ?
+        {
+          profile_id: li.profile_id,
+          playbook_summary: summarizeLinkedInIntelligenceForPrompt(li),
+          voice_rules: compactText(buildLinkedInVoiceRulesForPrompt(li), 900),
+          visual_rules: compactText(buildLinkedInVisualRulesForPrompt(li), 900),
+          post_format_ids: li.post_format_patterns.map((p) => p.id),
+          banned_phrases: li.generation_rules.banned_phrases,
+        }
+      : null,
   };
 }
 
@@ -457,11 +549,26 @@ function employeeForDeliverable(
 }
 
 function inferPlanningConstraints(workflow: WorkflowState): PlanningConstraints {
-  const prompt = `${workflow.business_goal ?? ""}\n${workflow.success_metric ?? ""}`.toLowerCase();
+  const prompt = [
+    workflow.business_goal,
+    workflow.success_metric,
+    ...(workflow.brand_learning_notes ?? []),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
   const explicitChannels: DynamicDeliverable["channel"][] = [];
   if (/\b(instagram|ig)\b/.test(prompt)) explicitChannels.push("instagram");
   if (/\b(linkedin|linked\s*in)\b/.test(prompt)) explicitChannels.push("linkedin");
   if (/\b(email|gmail|mail)\b/.test(prompt)) explicitChannels.push("email");
+
+  const linkedinExclusive =
+    /\blinkedin\b/.test(prompt) &&
+    /\b(no email|linkedin[\s-]only|linkedin channel only|exclude email|without email)\b/i.test(prompt);
+  if (linkedinExclusive) {
+    explicitChannels.length = 0;
+    explicitChannels.push("linkedin");
+  }
 
   const numberWords: Record<string, number> = {
     one: 1,
@@ -474,17 +581,40 @@ function inferPlanningConstraints(workflow: WorkflowState): PlanningConstraints 
     seven: 7,
   };
   const countMatch =
-    prompt.match(/\b(one|single|two|three|four|five|six|seven|[1-7])\b.{0,40}\b(deliverables?|outputs?|drafts?|assets?|posts?|emails?)\b/) ??
-    prompt.match(/\b(deliverables?|outputs?|drafts?|assets?|posts?|emails?)\b.{0,40}\b(one|single|two|three|four|five|six|seven|[1-7])\b/);
+    prompt.match(/\b(one|single|two|three|four|five|six|seven|[1-9]|1[0-4])\b.{0,40}\b(deliverables?|outputs?|drafts?|assets?|posts?|emails?)\b/) ??
+    prompt.match(/\b(deliverables?|outputs?|drafts?|assets?|posts?|emails?)\b.{0,40}\b(one|single|two|three|four|five|six|seven|[1-9]|1[0-4])\b/);
   const requestedOutputCountRaw = countMatch?.[1] ?? countMatch?.[2];
-  const requestedOutputCount =
+  let requestedOutputCount =
     requestedOutputCountRaw ?
       numberWords[requestedOutputCountRaw] ?? Number(requestedOutputCountRaw)
     : null;
+
+  const spanDaysMatch = prompt.match(/\b([1-9]|1[0-4])[-\s]?day\b/i);
+  const spanDaysParsed = spanDaysMatch ? Number(spanDaysMatch[1]) : null;
+  const linkedinCampaignLikely =
+    /\blinkedin\b/.test(prompt) &&
+    (/\b(campaign|sequence|calendar|package)\b/.test(prompt) ||
+      /\b(per day|each day|every day|daily)\b/.test(prompt) ||
+      /\bposts?\b/.test(prompt));
+  const multiDayLinkedInPlan =
+    typeof spanDaysParsed === "number" && spanDaysParsed >= 2 && linkedinCampaignLikely;
+
+  if (multiDayLinkedInPlan) {
+    requestedOutputCount =
+      typeof requestedOutputCount === "number" && Number.isFinite(requestedOutputCount) ?
+        Math.max(requestedOutputCount, spanDaysParsed)
+      : spanDaysParsed;
+  }
+
   const singleOutputRequested =
-    requestedOutputCount === 1 ||
-    /\b(one|single|1)\b.{0,50}\b(post|email|draft|asset|caption|message|output)\b/.test(prompt) ||
-    /\b(post|email|draft|asset|caption|message|output)\b.{0,50}\b(one|single|1)\b/.test(prompt);
+    typeof requestedOutputCount === "number" && requestedOutputCount > 1 ? false
+    : multiDayLinkedInPlan ? false
+    : requestedOutputCount === 1 ||
+      ((requestedOutputCount === null || requestedOutputCount === 1) &&
+        ((/\b(one|single|1)\b.{0,50}\b(post|email|draft|asset|caption|message|output)\b/.test(prompt) &&
+          !/\b(per day|each day|every day|daily)\b/.test(prompt)) ||
+          (/\b(post|email|draft|asset|caption|message|output)\b.{0,50}\b(one|single|1)\b/.test(prompt) &&
+            !/\b(per day|each day|every day|daily)\b/.test(prompt))));
   const forbidMultiDay =
     /\bdo not\b.{0,60}\b(multi[-\s]?day|7[-\s]?day|seven[-\s]?day|campaign|sequence|calendar)\b/.test(prompt) ||
     /\bnot\b.{0,60}\b(multi[-\s]?day|7[-\s]?day|seven[-\s]?day|campaign|sequence|calendar)\b/.test(prompt);
@@ -502,6 +632,7 @@ function inferPlanningConstraints(workflow: WorkflowState): PlanningConstraints 
     singleOutputRequested,
     forbidMultiDay,
     visualAssetsAreComponents,
+    linkedin_multi_day_campaign: Boolean(multiDayLinkedInPlan),
   };
 }
 
@@ -652,6 +783,10 @@ function constrainScottPlan(plan: ScottPlan, workflow: WorkflowState, roster: Re
 async function askScottForPlan(workflow: WorkflowState): Promise<ScottPlan> {
   const roster = resolveAgentRoster(workflow);
   const scopeContract = buildAgentScopeContract(workflow);
+  const deliverableBudgetHint =
+    typeof scopeContract.max_operator_review_outputs === "number" && scopeContract.max_operator_review_outputs > 1 ?
+      `When operator_scope_contract.max_operator_review_outputs is ${scopeContract.max_operator_review_outputs}, deliverables.length MUST equal that integer with distinct ids — use schedule_day 1..${scopeContract.max_operator_review_outputs} for daily cadence outputs unless scope channels forbid it. `
+    : "";
   const ownerList = roster.all
     .map((agent) => `${agent.id} (${agent.name}, ${agent.role}, tools: ${agent.tools.join(", ") || "general"})`)
     .join("; ");
@@ -666,7 +801,7 @@ async function askScottForPlan(workflow: WorkflowState): Promise<ScottPlan> {
       {
         role: "system",
         content:
-          `You are ${roster.manager.name}, Orbit's marketing manager agent. Read the operator work order, company knowledge base, available agent roster, operator_scope_contract, and selected marketing skill briefing. Decide the execution plan yourself, but obey the scope contract exactly. Return strict JSON only with keys: plan_summary, reasoning, steps, deliverables, final_review_checklist. Available agent owners are: ${ownerList}. Steps must be an ordered array of 3-7 steps with id, label, owner, summary, expected_output, depends_on, completion_signal. Every step owner must be one of these exact ids: ${roster.ownerIds.join(", ")}. Deliverables must be the concrete marketing outputs employee agents should produce, with id, kind (email|linkedin_post|instagram_caption|strategy_brief|generic_marketing_asset), channel, title, owner_agent_id, schedule_day, instructions, acceptance_criteria. Every deliverable owner_agent_id must be one of these employee ids: ${employeeList}. Scope contract: ${JSON.stringify(scopeContract)} Selected marketing skill briefing:\n${managerSkillBrief}\nUse multiple employee agents only when the requested scope naturally has multiple independent deliverables. schedule_day must be used only when the scope contract allows a dated sequence. Do not invent campaign length, channels, or extra review outputs.`,
+          `You are ${roster.manager.name}, Orbit's marketing manager agent. Read the operator work order, company knowledge base, available agent roster, operator_scope_contract, and selected marketing skill briefing. Decide the execution plan yourself, but obey the scope contract exactly. Return strict JSON only with keys: plan_summary, reasoning, steps, deliverables, final_review_checklist. Available agent owners are: ${ownerList}. Steps must be an ordered array of 3-7 steps with id, label, owner, summary, expected_output, depends_on, completion_signal. Every step owner must be one of these exact ids: ${roster.ownerIds.join(", ")}. Deliverables must be the concrete marketing outputs employee agents should produce, with id, kind (email|linkedin_post|instagram_caption|strategy_brief|generic_marketing_asset), channel, title, owner_agent_id, schedule_day, instructions, acceptance_criteria. Every deliverable owner_agent_id must be one of these employee ids: ${employeeList}. Scope contract: ${JSON.stringify(scopeContract)} ${deliverableBudgetHint}Selected marketing skill briefing:\n${managerSkillBrief}\nUse multiple employee agents only when the requested scope naturally has multiple independent deliverables. schedule_day must be used only when the scope contract allows a dated sequence. Do not invent channels beyond scope or exceed max_operator_review_outputs.`,
       },
       {
         role: "user",
@@ -695,16 +830,77 @@ async function askScottForPlan(workflow: WorkflowState): Promise<ScottPlan> {
   }, workflow, roster);
 }
 
+function scrubEmailBodyDisallowedDemoSignoff(body: string, workflow: WorkflowState, roster: ReturnType<typeof resolveAgentRoster>): string {
+  const allowLyraDemoBrand = Boolean(workflow.lyra_warm_intelligence) || isLyraCompanyUrl(workflow.company_url);
+  if (allowLyraDemoBrand) return body;
+
+  const manager = roster.manager.name?.trim() || "Scott";
+  const company =
+    workflow.website_intelligence?.company_name?.trim() ||
+    workflow.brand_kit?.brand_name?.trim() ||
+    "";
+  const companyTeam = company ? `The ${company.replace(/\s+(Inc\.?|LLC|Ltd|Pty\.?\s*Ltd)\.?$/i, "").trim()} team` : manager;
+
+  let b = body;
+  const swaps: Array<[RegExp, string]> = [
+    [/\b(best|kind)\s+regards,?\s*\n\s*Lyra\b/gi, `Best regards,\n${manager}`],
+    [/\bthanks,?\s*\n\s*Lyra\b/gi, `Thanks,\n${manager}`],
+    [/\bwarm\s+regards,?\s*\n\s*Lyra\b/gi, `Warm regards,\n${manager}`],
+    [/\bcheers,?\s*\n\s*Lyra\b/gi, `Cheers,\n${manager}`],
+    [/\bsincerely,?\s*\n\s*Lyra\b/gi, `Sincerely,\n${manager}`],
+    [/\b—\s*Lyra\b/gi, `— ${manager}`],
+    [/\nLyra\s*$/m, `\nBest regards,\n${companyTeam}`],
+  ];
+  for (const [re, rep] of swaps) b = b.replace(re, rep);
+
+  if (/\blyra\b/i.test(b)) {
+    if (company) b = b.replace(/\blyra technologies\b/gi, company);
+    b = b.replace(/\blyra\b/gi, manager);
+  }
+
+  return b;
+}
+
 async function askEmployeeToExecute(args: {
   workflow: WorkflowState;
   plan: ScottPlan;
   deliverable: DynamicDeliverable;
+  deliverableIndex: number;
   assignee: RuntimeAgent;
   revision?: ScottReview;
   previousOutput?: NovaOutput;
 }): Promise<NovaOutput> {
   const scopeContract = buildAgentScopeContract(args.workflow);
+  const rosterExec = resolveAgentRoster(args.workflow);
+  const lyraDemoBrandOk = Boolean(args.workflow.lyra_warm_intelligence) || isLyraCompanyUrl(args.workflow.company_url);
+  const emailSignoffDoctrine =
+    lyraDemoBrandOk ?
+      `For email, body must be a concise outbound email of 90-150 words with greeting, concrete reason to care, proof, one low-friction CTA, and a professional signoff using "Lyra" only when Lyra is the actual client brand in workflow_context (warm dossier attached); otherwise sign as ${args.assignee.name}, manager "${rosterExec.manager.name}", or "The [exact company_name from workflow_context] team". Never invent unrelated demo brands as the sender.`
+    : `For email, body must be a concise outbound email of 90-150 words with greeting, concrete reason to care, proof, one low-friction CTA, and a professional signoff using ${args.assignee.name}, manager "${rosterExec.manager.name}", or "The [exact company_name from workflow_context] team". Never sign as Lyra or any unrelated operator/client brand name that is not workflow_context.company_name.`;
+  const linkedInCtaTail =
+    args.workflow.channel_intelligence?.linkedin?.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+      " Make the CTA operator-grounded for healthcare/clinical workflows (documentation burden, capacity, partnerships, conversations with healthcare ops leads)."
+    : lyraDemoBrandOk ?
+      " Make the CTA specific: invite founders to book or reply for a focused strategy conversation when that matches workflow_context."
+    : " Make the CTA specific to workflow_context personas and proof anchors — avoid unrelated demo narratives.";
   const subAgentSkillBrief = formatSubAgentSkillBrief(args.workflow, args.deliverable.channel, args.deliverable.kind);
+  const li = args.workflow.channel_intelligence?.linkedin;
+  const linkedInSlot =
+    li && args.deliverable.channel === "linkedin" ?
+      (() => {
+        const pattern = pickLinkedInPostFormatPattern(li, args.deliverableIndex);
+        return {
+          deliverable_index: args.deliverableIndex,
+          post_format_id: pattern.id,
+          post_format_label: pattern.label,
+          caption_cadence_hint: pattern.caption_cadence_hint,
+          visual_card_type_hint: pattern.visual_card_type,
+          headline_rules: li.generation_rules.headline_rules,
+          caption_rules: li.generation_rules.caption_rules ?? [],
+          forbidden_headline_crumbs: li.generation_rules.forbidden_public_headline_patterns ?? [],
+        };
+      })()
+    : null;
   const content = await createJsonChatCompletion({
     label: `${args.assignee.name} execution`,
     temperature: args.revision ? 0.35 : 0.45,
@@ -714,7 +910,7 @@ async function askEmployeeToExecute(args: {
       {
         role: "system",
         content:
-          `You are ${args.assignee.name}, one of Orbit's marketing sub-agents. Execute only the deliverable Scott assigned to you, and obey the operator_scope_contract. Your configured tools are: ${args.assignee.tools.join(", ") || "general marketing execution"}. Use the selected sub-agent skill briefing below as execution doctrine:\n${subAgentSkillBrief}\nUse the knowledge base as evidence, never as copy-paste source text. Return strict JSON with keys: deliverable_id, kind, title, subject_line, preview_text, body, proof_point, call_to_action, source_anchors, notes. The returned kind must match the assigned deliverable kind. The returned content must stay on the assigned deliverable channel and must not add unrequested channels, campaign days, or extra operator-review outputs. If the deliverable includes supporting visual/image requirements, describe or support them inside the same deliverable instead of creating a separate channel. Never use placeholders like [Founder Name], [Your Name], [Company], or [Contact Information]; write a complete draft the operator could send or publish after only choosing the destination account/recipient. Avoid these generic marketing phrases entirely: ${GENERIC_MARKETING_PHRASES.join(", ")}. For email, body must be a concise outbound email of 90-150 words with greeting, concrete reason to care, proof, one low-friction CTA, and signoff from Lyra. Do not open with "I hope this message finds you well." For Instagram, body must be a publishable caption with a sharp hook, one transformed proof point, clear founder-facing CTA, and no LinkedIn/email language. Do not use any emojis. Do not add hashtags unless the operator explicitly requested hashtags. Make the CTA specific: invite founders to book or reply for a focused strategy conversation about shipping product with forward-deployed engineers.`,
+          `You are ${args.assignee.name}, one of Orbit's marketing sub-agents. Execute only the deliverable Scott assigned to you, and obey the operator_scope_contract. Your configured tools are: ${args.assignee.tools.join(", ") || "general marketing execution"}. Use the selected sub-agent skill briefing below as execution doctrine:\n${subAgentSkillBrief}\nUse the knowledge base as evidence, never as copy-paste source text. Return strict JSON with keys: deliverable_id, kind, title, subject_line, preview_text, body, proof_point, call_to_action, source_anchors, notes. The returned kind must match the assigned deliverable kind. The returned content must stay on the assigned deliverable channel and must not add unrequested channels, campaign days, or extra operator-review outputs. If the deliverable includes supporting visual/image requirements, describe or support them inside the same deliverable instead of creating a separate channel. Never use placeholders like [Founder Name], [Your Name], [Company], or [Contact Information]; write a complete draft the operator could send or publish after only choosing the destination account/recipient. Avoid these generic marketing phrases entirely: ${GENERIC_MARKETING_PHRASES.join(", ")}. ${emailSignoffDoctrine} Do not open with "I hope this message finds you well." For Instagram, body must be a publishable caption with a sharp hook, one transformed proof point, clear founder-facing CTA, and no LinkedIn/email language. Do not use any emojis. Do not add hashtags unless the operator explicitly requested hashtags. For LinkedIn, obey linkedin_native_execution_slot when present — align title + body hook to post_format_id and caption_rules.${linkedInCtaTail}${linkedinExecutionAddon(args.workflow, args.deliverable, args.deliverableIndex)}`,
       },
       {
         role: "user",
@@ -726,19 +922,28 @@ async function askEmployeeToExecute(args: {
           assignee: args.assignee,
           revision_request: args.revision ?? null,
           previous_output: args.previousOutput ?? null,
+          linkedin_native_execution_slot: linkedInSlot,
         }),
       },
     ],
   });
 
   const parsed = parseJsonObject<RawNovaOutput>(content, `${args.assignee.name} output`);
-  return normalizeEmployeeOutput(parsed, args.deliverable, args.assignee);
+  let output = normalizeEmployeeOutput(parsed, args.deliverable, args.assignee);
+  if (args.deliverable.channel === "email") {
+    output = {
+      ...output,
+      body: scrubEmailBodyDisallowedDemoSignoff(output.body, args.workflow, rosterExec),
+    };
+  }
+  return output;
 }
 
 async function askScottToReview(args: {
   workflow: WorkflowState;
   plan: ScottPlan;
   deliverable: DynamicDeliverable;
+  deliverableIndex: number;
   assignee: RuntimeAgent;
   output: NovaOutput;
 }): Promise<ScottReview> {
@@ -753,7 +958,7 @@ async function askScottToReview(args: {
       {
         role: "system",
         content:
-          `You are Scott, Orbit's manager agent. Review ${args.assignee.name}'s output against the original work order, operator_scope_contract, company knowledge base, selected skill review checks, and the deliverable acceptance criteria. Selected skill review checks:\n${reviewSkillBrief}\nReturn strict JSON with keys: decision (approve|revise), score (0-100), critique, requested_action, issues. You must request revision if the output violates the scope contract: wrong channel, extra channel, unrequested multi-day sequence, or splitting one requested output into multiple operator-review deliverables. You must also request revision for placeholder tokens like [Founder Name]/[Your Name], copied knowledge-base phrasing, weak CTAs, or these banned phrases: ${GENERIC_MARKETING_PHRASES.join(", ")}. For Instagram, request revision if there are emojis or unrequested hashtags. Approve only when it is usable by the operator, specific to the company, has a concrete CTA, obeys the scope contract, follows selected skill checks, and transforms source material into original copy. Do not nitpick forever: if the draft is commercially usable with only minor polish and obeys scope, approve with a critique note. If revision is needed, requested_action must be specific enough for ${args.assignee.name} to redo the work.`,
+          `You are Scott, Orbit's manager agent. Review ${args.assignee.name}'s output against the original work order, operator_scope_contract, company knowledge base, selected skill review checks, and the deliverable acceptance criteria. Selected skill review checks:\n${reviewSkillBrief}\nReturn strict JSON with keys: decision (approve|revise), score (0-100), critique, requested_action, issues. You must request revision if the output violates the scope contract: wrong channel, extra channel, unrequested multi-day sequence, or splitting one requested output into multiple operator-review deliverables. You must also request revision for placeholder tokens like [Founder Name]/[Your Name], copied knowledge-base phrasing, weak CTAs, or these banned phrases: ${GENERIC_MARKETING_PHRASES.join(", ")}. For Instagram, request revision if there are emojis or unrequested hashtags. Approve only when it is usable by the operator, specific to the company, has a concrete CTA, obeys the scope contract, follows selected skill checks, and transforms source material into original copy. Do not nitpick forever: if the draft is commercially usable with only minor polish and obeys scope, approve with a critique note. If revision is needed, requested_action must be specific enough for ${args.assignee.name} to redo the work.${linkedinReviewAddon(args.workflow, args.deliverable, args.deliverableIndex)}`,
       },
       {
         role: "user",
@@ -807,6 +1012,100 @@ function fallbackManagerVisualBrief(args: {
       ? "square/portrait social feed composition with a clear subject and negative space for caption design"
       : "professional LinkedIn post hero image, credible founder/operator editorial style";
 
+  const li = args.workflow.channel_intelligence?.linkedin;
+  if (li && args.platform === "linkedin") {
+    const vf = li.visual_profile;
+    const formatHint = args.draft.meta.channel_post_format ?? args.draft.meta.channel_format ?? "linkedin_native_card";
+    const playbookVisual = buildLinkedInVisualRulesForPrompt(li);
+    const negExtras = [...vf.avoid_visuals, ...(vf.image_generation_negative_rules ?? [])];
+
+    if (li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID) {
+      return {
+        visual_mode: "brand_graphic",
+        asset_purpose: "linkedin_post_image",
+        prompt: [
+          `SUBJECT: ${visualConcept} — LinkedIn editorial card (${formatHint}) for ${company}; ${vf.summary}`,
+          `SETTING: Pale butter-yellow or cream/off-white surfaces; deep burgundy or dark-brown serif headline typography; subtle Heidi flower-loop motif with soft botanical line-art in corners; report-card, healthcare proof/stat tile, partnership announcement, or institutional statement layout — editorial brand_graphic only.`,
+          `COMPOSITION: Calm institutional hierarchy with serif headline band, proof/stat ribbon or partnership strip, generous cream negative space; minimal cool-blue accents only when abstract partner-logo neutrality is implied.`,
+          `CAMERA/FRAMING: Flat editorial illustration / premium institutional graphic — crisp layout geometry; never documentary photography.`,
+          `LIGHTING: Soft warm daylight on yellow/cream fields; restrained shadows; high burgundy-on-cream contrast.`,
+          `SOURCE ANCHOR: ${sourceAnchor}. Treat as internal evidence — abstract into shapes, not readable signage.`,
+          `CAMPAIGN CONTEXT: ${args.output.proof_point}. ${args.output.notes}`,
+          playbookVisual,
+          "NEGATIVE PROMPT: neon, arcade, pixel art, sci-fi chrome UI, robots or android mascots, purple SaaS dashboards, stock office photography, generic AI brains, gradient SaaS brochure backgrounds, hyper-real portraits, watermarks.",
+        ].join("\n"),
+        negative_prompt: [
+          "neon gradients",
+          "arcade or pixel art",
+          "purple or lavender SaaS dashboards",
+          "sci-fi holographic chrome UI",
+          "robots android mascots mech armor",
+          "stock office photography",
+          "generic AI brain blobs",
+          "photo-real executive portraits",
+          "gradient SaaS brochure backgrounds",
+          "watermarks",
+          ...negExtras,
+        ].join(", "),
+        visual_source_anchor: sourceAnchor,
+        visual_style_notes: `LinkedIn Channel Intelligence (${li.profile_id}) — butter/cream editorial report-card hero aligned to ${formatHint}.`,
+      };
+    }
+
+    if (li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID) {
+      return {
+        visual_mode: "brand_graphic",
+        asset_purpose: "linkedin_post_image",
+        prompt: [
+          `SUBJECT: ${visualConcept} — LinkedIn-native card (${formatHint}) for ${company}; ${vf.summary}`,
+          `SETTING: Dark navy/black base (${vf.palette.slice(0, 5).join(", ")}) with electric purple/violet/magenta panels; pixel-art human operators/speakers/builders or arcade poster typography — stylized brand worlds, not stock photography.`,
+          `COMPOSITION: Social proof layout with headline band, pixel human avatar tiles or speaker grid, generous contrast for white type; scene matches playbook: ${vf.scene_types.slice(0, 3).join("; ")}.`,
+          `CAMERA/FRAMING: Flat / slight isometric illustration or premium vector-social texture allowed; crisp edges, poster hierarchy, confident negative space.`,
+          `LIGHTING: Soft bloom on magenta/violet accents; restrained neon yellow only for KPI/stat callouts when relevant.`,
+          `SOURCE ANCHOR: ${sourceAnchor}. Treat as internal evidence — abstract into shapes, not readable signage.`,
+          `CAMPAIGN CONTEXT: ${args.output.proof_point}. ${args.output.notes}`,
+          playbookVisual,
+          "NEGATIVE PROMPT: humanoid robots, robot mascots, android faces, power armor, mech suits, cybernetic chrome limbs, corporate stock office photography, generic blue SaaS gradients, healthcare editorial serif layouts, vague glowing AI brains, hyper-real documentary stock smiles, watermarks.",
+        ].join("\n"),
+        negative_prompt: [
+          "humanoid robots",
+          "robot mascots",
+          "android faces",
+          "power armor mech suits cybernetic chrome limbs metal agent characters",
+          "corporate stock office photography",
+          "generic blue SaaS gradients",
+          "healthcare editorial serif vibe",
+          "vague glowing AI brain graphics",
+          "abstract meaningless gradients without brand hierarchy",
+          "boost productivity streamline workflows AI-powered productivity clichés as readable image text",
+          "watermarks",
+          ...negExtras,
+        ].join(", "),
+        visual_source_anchor: sourceAnchor,
+        visual_style_notes: `LinkedIn Channel Intelligence (${li.profile_id}) — purple/pixel/arcade-native hero aligned to ${formatHint}.`,
+      };
+    }
+
+    return {
+      visual_mode: "brand_graphic",
+      asset_purpose: "linkedin_post_image",
+      prompt: [
+        `SUBJECT: ${visualConcept} — LinkedIn playbook card (${formatHint}) for ${company}; ${vf.summary}`,
+        `SETTING: Follow playbook palette (${vf.palette.slice(0, 6).join(", ")}) with motifs: ${vf.motifs.slice(0, 4).join("; ")}.`,
+        `COMPOSITION: Scene aligned to ${vf.scene_types.slice(0, 3).join("; ")} — crisp hierarchy, readable negative space.`,
+        `CAMERA/FRAMING: Stylized brand-graphic illustration consistent with playbook typography (${vf.typography_style.join("; ")}).`,
+        `LIGHTING: Coherent with palette — avoid unrelated stock-photo realism.`,
+        `SOURCE ANCHOR: ${sourceAnchor}. Treat as internal evidence — abstract into shapes, not readable signage.`,
+        `CAMPAIGN CONTEXT: ${args.output.proof_point}. ${args.output.notes}`,
+        playbookVisual,
+        `NEGATIVE PROMPT: ${vf.avoid_visuals.join(", ")}, watermarks.`,
+      ].join("\n"),
+      negative_prompt: [...negExtras, "watermarks"].join(", "),
+      visual_source_anchor: sourceAnchor,
+      visual_style_notes: `LinkedIn Channel Intelligence (${li.profile_id}) — playbook-aligned brand_graphic hero for ${formatHint}.`,
+    };
+  }
+
   return {
     visual_mode: "photo_real_editorial",
     asset_purpose: args.platform === "instagram" ? "instagram_feed_image" : "linkedin_post_image",
@@ -840,8 +1139,10 @@ function normalizeManagerVisualBrief(raw: RawManagerVisualBrief, fallback: Manag
     /lighting:/i.test(prompt) &&
     /source anchor:/i.test(prompt);
   const normalizedPrompt = promptHasRequiredSections ? prompt : fallback.prompt;
+  const visualMode =
+    raw.visual_mode === "brand_graphic" || raw.visual_mode === "photo_real_editorial" ? raw.visual_mode : fallback.visual_mode;
   return {
-    visual_mode: "photo_real_editorial",
+    visual_mode: visualMode,
     asset_purpose:
       raw.asset_purpose === "linkedin_post_image" || raw.asset_purpose === "instagram_feed_image"
         ? raw.asset_purpose
@@ -864,8 +1165,60 @@ async function askScottForVisualBrief(args: {
 }): Promise<ManagerVisualBrief> {
   const fallback = fallbackManagerVisualBrief(args);
   const roster = resolveAgentRoster(args.workflow);
+  const linkedInPlaybook =
+    args.workflow.channel_intelligence?.linkedin && args.platform === "linkedin" ?
+      {
+        summary: summarizeLinkedInIntelligenceForPrompt(args.workflow.channel_intelligence.linkedin),
+        visual_rules: buildLinkedInVisualRulesForPrompt(args.workflow.channel_intelligence.linkedin),
+      }
+    : null;
 
   try {
+    const liProfileId = args.workflow.channel_intelligence?.linkedin?.profile_id;
+    const linkedInNativeInstructions =
+      linkedInPlaybook ?
+        liProfileId === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ?
+          [
+            `You are ${roster.manager.name}, Orbit's manager agent and creative director.`,
+            "LinkedIn Channel Intelligence is active for Heidi: produce ONE warm editorial hero brief — pale butter-yellow/cream surfaces, burgundy/dark-brown serif headlines, institutional report-card or healthcare proof/partnership layouts, subtle floral loop motif — brand_graphic only.",
+            "visual_mode must be brand_graphic. Never stock photography, neon, arcade, pixel art, sci-fi chrome UI, purple SaaS dashboards, robots, generic AI brains, or gradient SaaS brochure backgrounds.",
+            "Return strict JSON only with keys: visual_mode, asset_purpose, prompt, negative_prompt, visual_source_anchor, visual_style_notes.",
+            "asset_purpose must be linkedin_post_image.",
+            "The prompt must include explicit sections named SUBJECT, SETTING, COMPOSITION, CAMERA/FRAMING, LIGHTING, SOURCE ANCHOR, CAMPAIGN CONTEXT, and NEGATIVE PROMPT.",
+            "Embed the visual_rules faithfully. Negative prompt must reinforce bans on neon/purple/pixel/arcade/sci‑fi/robots/stock offices/generic AI hype visuals.",
+            "Do not invent readable signage, fake logos, or real-person likenesses.",
+          ].join("\n")
+        : liProfileId === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID ?
+          [
+            `You are ${roster.manager.name}, Orbit's manager agent and creative director.`,
+            "LinkedIn Channel Intelligence is active for Relevance AI: produce ONE stylized LinkedIn-native hero card brief (purple/violet/magenta/lavender/dark navy world; pixel-art human operators/speakers/builders or arcade typography when native to the tile).",
+            "visual_mode must be brand_graphic for illustrated / premium social-card compositions — not stock photography.",
+            "Return strict JSON only with keys: visual_mode, asset_purpose, prompt, negative_prompt, visual_source_anchor, visual_style_notes.",
+            "asset_purpose must be linkedin_post_image.",
+            "The prompt must include explicit sections named SUBJECT, SETTING, COMPOSITION, CAMERA/FRAMING, LIGHTING, SOURCE ANCHOR, CAMPAIGN CONTEXT, and NEGATIVE PROMPT.",
+            "Embed the visual_rules into CAMPAIGN CONTEXT or SETTING faithfully. Negative prompt must ban humanoid robots, robot mascots, android faces, power armor/mech/cybernetic chrome agents, generic blue SaaS gradients, corporate stock office photos, healthcare serif editorial vibes, vague AI brains, and generic productivity slogans as readable image text.",
+            "Do not invent readable signage, fake logos, or real-person likenesses.",
+          ].join("\n")
+        : [
+            `You are ${roster.manager.name}, Orbit's manager agent and creative director.`,
+            "LinkedIn Channel Intelligence is active: produce ONE playbook-faithful LinkedIn hero card brief matching the seeded visual_profile (brand_graphic).",
+            "Return strict JSON only with keys: visual_mode, asset_purpose, prompt, negative_prompt, visual_source_anchor, visual_style_notes.",
+            "asset_purpose must be linkedin_post_image.",
+            "The prompt must include explicit sections named SUBJECT, SETTING, COMPOSITION, CAMERA/FRAMING, LIGHTING, SOURCE ANCHOR, CAMPAIGN CONTEXT, and NEGATIVE PROMPT.",
+            "Honor visual_rules and anti-generic negatives from the playbook.",
+            "Do not invent readable signage, fake logos, or real-person likenesses.",
+          ].join("\n")
+      : [
+          `You are ${roster.manager.name}, Orbit's manager agent and creative director.`,
+          "Create one hyper-realistic image-generation brief for the approved social draft.",
+          "The result must be a realistic editorial photograph, not an abstract background, graphic poster, 3D render, vector illustration, isometric scene, neon sci-fi image, or generic AI startup visual.",
+          "Return strict JSON only with keys: visual_mode, asset_purpose, prompt, negative_prompt, visual_source_anchor, visual_style_notes.",
+          "visual_mode must be photo_real_editorial.",
+          "asset_purpose must be instagram_feed_image or linkedin_post_image.",
+          "The prompt must include explicit sections named SUBJECT, SETTING, COMPOSITION, CAMERA/FRAMING, LIGHTING, SOURCE ANCHOR, CAMPAIGN CONTEXT, and NEGATIVE PROMPT.",
+          "Use concrete people/action/props/space details from the company memory, work order, employee output, proof point, and source anchors. Do not invent readable signage, claims, fake logos, or real person likenesses.",
+        ].join("\n");
+
     const content = await createJsonChatCompletion({
       label: "Scott visual brief",
       temperature: 0.35,
@@ -874,16 +1227,7 @@ async function askScottForVisualBrief(args: {
       messages: [
         {
           role: "system",
-          content: [
-            `You are ${roster.manager.name}, Orbit's manager agent and creative director.`,
-            "Create one hyper-realistic image-generation brief for the approved social draft.",
-            "The result must be a realistic editorial photograph, not an abstract background, graphic poster, 3D render, vector illustration, isometric scene, neon sci-fi image, or generic AI startup visual.",
-            "Return strict JSON only with keys: visual_mode, asset_purpose, prompt, negative_prompt, visual_source_anchor, visual_style_notes.",
-            "visual_mode must be photo_real_editorial.",
-            "asset_purpose must be instagram_feed_image or linkedin_post_image.",
-            "The prompt must include explicit sections named SUBJECT, SETTING, COMPOSITION, CAMERA/FRAMING, LIGHTING, SOURCE ANCHOR, CAMPAIGN CONTEXT, and NEGATIVE PROMPT.",
-            "Use concrete people/action/props/space details from the company memory, work order, employee output, proof point, and source anchors. Do not invent readable signage, claims, fake logos, or real person likenesses.",
-          ].join("\n"),
+          content: linkedInNativeInstructions,
         },
         {
           role: "user",
@@ -894,6 +1238,7 @@ async function askScottForVisualBrief(args: {
             social_platform: args.platform,
             draft: args.draft,
             employee_output: args.output,
+            linkedin_channel_playbook: linkedInPlaybook,
             fallback_example: fallback,
           }),
         },
@@ -1139,8 +1484,11 @@ function resolveDeliverableDay(deliverable: DynamicDeliverable, fallbackIndex: n
 function buildEmailDraft(output: NovaOutput, review: ScottReview, workflow: WorkflowState, day: number): CampaignEmailDraft {
   const subject = output.subject_line?.trim() || output.title;
   const preview = output.preview_text?.trim() || output.proof_point;
+  const roster = resolveAgentRoster(workflow);
+  const managerLine = roster.manager.name?.trim() || "Scott";
+  const defaultClosing = `Best regards,\n${managerLine}`;
   const signoffIncluded = /\n(best|thanks|regards|cheers|sincerely)[,\s]/i.test(output.body);
-  const fullEmail = signoffIncluded ? output.body : `${output.body.trim()}\n\nBest,\nNova`;
+  const fullEmail = signoffIncluded ? output.body : `${output.body.trim()}\n\n${defaultClosing}`;
 
   return {
     meta: {
@@ -1166,7 +1514,7 @@ function buildEmailDraft(output: NovaOutput, review: ScottReview, workflow: Work
         greeting: fullEmail.split("\n")[0] ?? "Hi,",
         body: output.body,
         proof_point: output.proof_point,
-        signoff: signoffIncluded ? "" : "Best,\nNova",
+        signoff: signoffIncluded ? "" : defaultClosing,
         full_email: fullEmail,
       },
     },
@@ -1184,7 +1532,42 @@ function buildEmailDraft(output: NovaOutput, review: ScottReview, workflow: Work
   };
 }
 
-function buildLinkedInDraft(output: NovaOutput, review: ScottReview, workflow: WorkflowState, day: number): CampaignLinkedInPostDraft {
+function buildLinkedInDraft(
+  output: NovaOutput,
+  review: ScottReview,
+  workflow: WorkflowState,
+  day: number,
+  deliverableIndex: number,
+  deliverable: DynamicDeliverable,
+): CampaignLinkedInPostDraft {
+  const li = workflow.channel_intelligence?.linkedin;
+  const pattern = li ? pickLinkedInPostFormatPattern(li, deliverableIndex) : null;
+  const channelFormatId = pattern?.id ?? "manager_planned_linkedin_post";
+  const publicHeadline =
+    li && pattern ?
+      normalizeLinkedInHeadlineWithChannelIntelligence({
+        intelligence: li,
+        rawHeadline: output.title,
+        pattern,
+        deliverableIndex,
+        day,
+        proofSnippet: output.proof_point,
+        deliverableTitle: deliverable.title,
+      })
+    : output.title.trim();
+
+  const strategicInsight =
+    pattern ?
+      `${pattern.label}: ${pattern.description} ${output.notes}`.slice(0, 520)
+    : output.notes;
+  const campaignAngle = pattern ? `${pattern.label} — ${publicHeadline}`.slice(0, 240) : publicHeadline;
+  const styleReason =
+    li && pattern ?
+      `Applied ${li.profile_id} playbook pattern "${pattern.id}" (${pattern.visual_card_type}); Phase 2 native headline normalization for feed-facing title.`
+    : undefined;
+  const voiceApplied = li ? compactText(buildLinkedInVoiceRulesForPrompt(li), 420) ?? "" : undefined;
+  const visualApplied = li ? compactText(buildLinkedInVisualRulesForPrompt(li), 420) ?? "" : undefined;
+
   return {
     meta: {
       id: crypto.randomUUID(),
@@ -1194,26 +1577,37 @@ function buildLinkedInDraft(output: NovaOutput, review: ScottReview, workflow: W
       channel: "linkedin",
       original_prompt: workflow.business_goal ?? "",
       strategic_intent: output.notes,
-      content_angle: output.title,
+      content_angle: publicHeadline,
       source_anchor: output.source_anchors[0],
-      channel_strategy: "LLM-planned LinkedIn deliverable.",
+      channel_strategy: li ? "LinkedIn native — Channel Intelligence playbook." : "LLM-planned LinkedIn deliverable.",
       cta_text: output.call_to_action,
       is_published: false,
       extracted_fact: output.proof_point,
-      strategic_insight: output.notes,
-      campaign_angle: output.title,
-      channel_format: "manager_planned_linkedin_post",
-      originality_notes: "Reviewed by Scott against the work order and company knowledge base.",
+      strategic_insight: strategicInsight,
+      campaign_angle: campaignAngle,
+      channel_format: channelFormatId,
+      originality_notes:
+        li ? li.anti_copy_rules.join(" ") : "Reviewed by Scott against the work order and company knowledge base.",
       reference_usage_policy: "evidence_only",
+      ...(li ?
+        {
+          channel_intelligence_profile_id: li.profile_id,
+          channel_post_format: channelFormatId,
+          channel_style_match_reason: styleReason,
+          channel_originality_note: li.anti_copy_rules[0],
+          channel_voice_rules_applied: voiceApplied,
+          channel_visual_style_applied: visualApplied,
+        }
+      : {}),
     },
     type: "linkedin_post",
-    headline: output.title,
+    headline: publicHeadline,
     body: output.body,
     card_config: {
-      headline: output.title,
+      headline: publicHeadline,
       subheadline: output.call_to_action,
       logo_placement: "top-right",
-      brand_color_overlay: workflow.brand_kit?.primary_hex ?? "#111827",
+      brand_color_overlay: workflow.brand_kit?.accent_hex ?? workflow.brand_kit?.primary_hex ?? "#111827",
     },
   };
 }
@@ -1288,7 +1682,7 @@ function buildDraft(
   };
   if (kind === "email") return buildEmailDraft(alignedOutput, review, workflow, day);
   if (kind === "instagram_caption") return buildInstagramDraft(alignedOutput, review, workflow, day);
-  return buildLinkedInDraft(alignedOutput, review, workflow, day);
+  return buildLinkedInDraft(alignedOutput, review, workflow, day, deliverableIndex, deliverable);
 }
 
 function buildManagerReview(draftId: string, review: ScottReview, assignee: RuntimeAgent): ManagerContentReview {
@@ -1301,7 +1695,7 @@ function buildManagerReview(draftId: string, review: ScottReview, assignee: Runt
     decision: review.decision,
     score: review.score,
     issues: review.issues.map((issue) => ({
-      type: "generic_copy",
+      type: coerceManagerIssueType(issue.type),
       severity: issue.severity,
       note: `${issue.type}: ${issue.note}`,
     })),
@@ -1310,9 +1704,62 @@ function buildManagerReview(draftId: string, review: ScottReview, assignee: Runt
   };
 }
 
-function buildManagerCritique(draftId: string, review: ScottReview, assignee: RuntimeAgent): ManagerCritique {
+function critiqueReasonFromIssueType(type: ManagerContentIssueType): ManagerCritiqueReasonCode {
+  switch (type) {
+    case "generic_copy":
+    case "generic_channel_fit":
+    case "wrong_channel_voice":
+      return "generic_channel_fit";
+    case "weak_channel_format":
+      return "visual_too_generic";
+    case "unsupported_claim":
+      return "unsupported_claim";
+    case "weak_cta":
+      return "weak_cta";
+    case "repetitive":
+      return "repetitive";
+    case "too_close_to_reference":
+      return "too_close_to_reference";
+    default:
+      return "missing_synthesis";
+  }
+}
+
+function alignDraftMetaWithFinalReview(draft: CampaignExecutionDraft, managerReview: ManagerContentReview): CampaignExecutionDraft {
+  if (managerReview.decision === "approve") return draft;
+  return {
+    ...draft,
+    meta: {
+      ...draft.meta,
+      status: "revision_requested",
+      operator_status: "rejected",
+    },
+  };
+}
+
+function buildManagerCritiqueFromAugmentedReview(
+  draftId: string,
+  managerReview: ManagerContentReview,
+  scottReview: ScottReview,
+  assignee: RuntimeAgent,
+): ManagerCritique {
   const reasonCodes: ManagerCritiqueReasonCode[] =
-    review.issues.length > 0 ? review.issues.slice(0, 4).map(() => "missing_synthesis") : [];
+    managerReview.issues.length > 0 ?
+      Array.from(new Set(managerReview.issues.slice(0, 10).map((i) => critiqueReasonFromIssueType(i.type))))
+    : [];
+
+  const playbookFriction = managerReview.issues
+    .map((i) => i.note)
+    .filter((n) => n.includes("[channel-intelligence]") || n.includes("[channel-visual]"));
+  let critique = scottReview.critique;
+  if (playbookFriction.length > 0) {
+    critique = `${critique} Channel playbook QA: ${playbookFriction.slice(0, 5).join("; ")}`;
+  }
+
+  const requestedAction =
+    managerReview.decision === "revise" ?
+      managerReview.revisionInstruction ?? scottReview.requested_action
+    : scottReview.requested_action;
 
   return {
     id: crypto.randomUUID(),
@@ -1321,28 +1768,64 @@ function buildManagerCritique(draftId: string, review: ScottReview, assignee: Ru
     targetAgentDisplayName: assignee.name,
     managerAgentId: "scott",
     managerDisplayName: "Scott",
-    severity: review.decision === "approve" ? "note" : review.score < 70 ? "blocker" : "pushback",
-    stance: review.decision === "approve" ? "approve" : review.score < 70 ? "block" : "challenge",
-    critique: review.critique,
-    requestedAction: review.requested_action,
+    severity:
+      managerReview.decision === "approve" ? "note"
+      : managerReview.score < 70 ? "blocker"
+      : "pushback",
+    stance:
+      managerReview.decision === "approve" ? "approve"
+      : managerReview.score < 70 ? "block"
+      : "challenge",
+    critique,
+    requestedAction,
     reasonCodes,
-    linkedReviewScore: review.score,
-    linkedReviewDecision: review.decision,
+    linkedReviewScore: managerReview.score,
+    linkedReviewDecision: managerReview.decision,
     createdAt: new Date().toISOString(),
   };
 }
 
 export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<void> {
-  const workflow = workflowStore.getWorkflow(workflowId);
+  let workflow = workflowStore.getWorkflow(workflowId);
   if (!workflow || !workflow.website_intelligence || !workflow.product_marketing_context) {
     throw new Error("Workflow missing required context for dynamic marketing execution.");
   }
+
+  const channelIntel = resolveChannelIntelligence({
+    companyUrl: workflow.company_url,
+    companyName: workflow.website_intelligence.company_name,
+  });
+  if (channelIntel) {
+    workflowStore.updateWorkflow(workflowId, { channel_intelligence: channelIntel });
+    workflow = workflowStore.getWorkflow(workflowId) ?? workflow;
+    workflowStore.addLog(workflowId, {
+      role: "marketing_manager",
+      step_id: "brand_profile_loaded",
+      message: `[Scott]: Loaded LinkedIn Channel Intelligence playbook (${channelIntel.linkedin?.profile_id ?? "native"}).`,
+    });
+    appendGovernanceLog(
+      workflowId,
+      createGovernanceEntry({
+        agent_id: "marketing_manager",
+        display_agent_name: "Scott",
+        step_id: "brand_profile_loaded",
+        decision: "Attached seeded LinkedIn Channel Intelligence for native post/visual alignment.",
+        rationale:
+          channelIntel.linkedin ?
+            `Playbook ${channelIntel.linkedin.profile_id} (${channelIntel.linkedin.source_mode}) — voice/visual/post-format constraints active for LinkedIn deliverables.`
+          : "Channel intelligence envelope attached.",
+        resulting_asset: "channel_intelligence",
+        source_url: workflow.company_url,
+      }),
+    );
+  }
+
   const roster = resolveAgentRoster(workflow);
 
   workflowStore.addLog(workflowId, {
     role: "marketing_manager",
     step_id: "request_received",
-    message: `[Scott]: Reading the work order and company memory for ${workflow.website_intelligence.company_name}.`,
+    message: `[Scott]: Reading the work order and company memory for ${workflow.website_intelligence?.company_name ?? "the company"}.`,
     metadata: {
       ui_event: {
         agent_id: "scott",
@@ -1411,7 +1894,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
       },
     });
 
-    let novaOutput = await askEmployeeToExecute({ workflow, plan, deliverable, assignee });
+    let novaOutput = await askEmployeeToExecute({ workflow, plan, deliverable, deliverableIndex, assignee });
     workflowStore.addLog(workflowId, {
       role: "content_specialist",
       step_id: "campaign_draft_generated",
@@ -1426,7 +1909,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
       },
     });
 
-    let review = await askScottToReview({ workflow, plan, deliverable, assignee, output: novaOutput });
+    let review = await askScottToReview({ workflow, plan, deliverable, deliverableIndex, assignee, output: novaOutput });
     let revisionCount = 0;
 
     while (review.decision === "revise" && revisionCount < MAX_REVISIONS) {
@@ -1447,6 +1930,7 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
         workflow,
         plan,
         deliverable,
+        deliverableIndex,
         assignee,
         revision: review,
         previousOutput: novaOutput,
@@ -1464,17 +1948,66 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
           },
         },
       });
-      review = await askScottToReview({ workflow, plan, deliverable, assignee, output: novaOutput });
+      review = await askScottToReview({ workflow, plan, deliverable, deliverableIndex, assignee, output: novaOutput });
       revisionCount += 1;
     }
 
     const draft = buildDraft(novaOutput, review, workflow, deliverable, deliverableIndex);
-    const managerReview = buildManagerReview(draft.meta.id, review, assignee);
-    const critique = buildManagerCritique(draft.meta.id, review, assignee);
+    const wfForReview = workflowStore.getWorkflow(workflowId) ?? workflow;
+    let managerReview = augmentManagerReviewWithChannelIntelligence(
+      buildManagerReview(draft.meta.id, review, assignee),
+      draft,
+      wfForReview,
+    );
+
+    const { asset, visualBrief, deterministicVisibleCopy } = await generateSocialAssetForDraft({
+      workflowId,
+      workflow,
+      plan,
+      deliverable,
+      draft,
+      output: novaOutput,
+    });
+    const wfAfterVisual = workflowStore.getWorkflow(workflowId) ?? workflow;
+    if (visualBrief && wfAfterVisual.channel_intelligence?.linkedin) {
+      const skipHeidiGptCue =
+        asset?.rendering_method === "deterministic_svg_template" || Boolean(asset?.playbook_driven);
+      const promptForLiQa =
+        asset?.playbook_driven && asset.prompt ? asset.prompt : visualBrief.prompt;
+      const negForLiQa =
+        asset?.playbook_driven && asset.negative_prompt ?
+          asset.negative_prompt
+        : visualBrief.negative_prompt;
+      managerReview = appendIssuesToManagerReview(
+        managerReview,
+        collectLinkedInVisualPromptIssues(wfAfterVisual, promptForLiQa, negForLiQa, {
+          skipHeidiGptVisualCueCheck: skipHeidiGptCue,
+        }),
+      );
+      if (deterministicVisibleCopy && draft.type === "linkedin_post") {
+        managerReview = appendPlainIssuesToManagerReview(
+          managerReview,
+          collectDeterministicHeidiUnsupportedNumericIssues(
+            deterministicVisibleCopy,
+            wfAfterVisual,
+            draft,
+          ),
+        );
+      }
+      if (asset?.playbook_driven && draft.type === "linkedin_post") {
+        managerReview = appendPlainIssuesToManagerReview(
+          managerReview,
+          collectPlaybookLinkedInImageAssetIssues(wfAfterVisual, asset, draft),
+        );
+      }
+    }
+
+    const critique = buildManagerCritiqueFromAugmentedReview(draft.meta.id, managerReview, review, assignee);
+    const draftAligned = alignDraftMetaWithFinalReview(draft, managerReview);
     const draftWithReview: CampaignExecutionDraft = {
-      ...draft,
+      ...draftAligned,
       meta: {
-        ...draft.meta,
+        ...draftAligned.meta,
         manager_review: managerReview,
         manager_critique: critique,
       },
@@ -1483,18 +2016,10 @@ export async function runDynamicMarketingWorkOrder(workflowId: string): Promise<
     drafts.push(draftWithReview);
     reviews.push(managerReview);
     critiques.push(critique);
-    const asset = await generateSocialAssetForDraft({
-      workflowId,
-      workflow,
-      plan,
-      deliverable,
-      draft: draftWithReview,
-      output: novaOutput,
-    });
     if (asset) {
       generatedAssets.push(asset);
     }
-    if (review.decision !== "approve") {
+    if (managerReview.decision !== "approve") {
       hasUnapprovedOutput = true;
     }
 
@@ -1573,9 +2098,13 @@ async function generateSocialAssetForDraft(args: {
   deliverable: DynamicDeliverable;
   draft: CampaignExecutionDraft;
   output: NovaOutput;
-}): Promise<GeneratedCampaignAsset | null> {
+}): Promise<{
+  asset: GeneratedCampaignAsset | null;
+  visualBrief: ManagerVisualBrief | null;
+  deterministicVisibleCopy?: string;
+}> {
   const platform = socialPlatformForDraft(args.draft);
-  if (!platform) return null;
+  if (!platform) return { asset: null, visualBrief: null };
 
   const { workflowId, workflow, plan, deliverable, draft, output } = args;
   if (!workflow.brand_kit) {
@@ -1584,7 +2113,7 @@ async function generateSocialAssetForDraft(args: {
       step_id: "visual_assets_generated",
       message: `[Scott visual skill]: Skipped ${platform} image generation because brand kit is missing.`,
     });
-    return null;
+    return { asset: null, visualBrief: null };
   }
 
   const visualBrief = await askScottForVisualBrief({
@@ -1597,10 +2126,33 @@ async function generateSocialAssetForDraft(args: {
     platform,
   });
 
+  const li = workflow.channel_intelligence?.linkedin;
+  const linkedInVisualRenderMode = (
+    process.env.ORBIT_LINKEDIN_VISUAL_RENDER_MODE ?? "deterministic"
+  ).toLowerCase();
+  const useHeidiDeterministicLinkedInCard =
+    platform === "linkedin" &&
+    draft.type === "linkedin_post" &&
+    li?.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID &&
+    linkedInVisualRenderMode === "deterministic";
+
+  const usePlaybookImageModelLinkedIn =
+    platform === "linkedin" &&
+    draft.type === "linkedin_post" &&
+    li &&
+    (li.profile_id === HEIDI_AI_LINKEDIN_PLAYBOOK_ID ||
+      li.profile_id === RELEVANCE_AI_LINKEDIN_PLAYBOOK_ID) &&
+    linkedInVisualRenderMode === "image_model";
+
   workflowStore.addLog(workflowId, {
     role: "visual_agent",
     step_id: "visual_assets_generated",
-    message: `[Scott visual skill]: Generating ${platform} photo-real image for "${draft.meta.content_angle ?? draftTitle(draft)}".`,
+    message:
+      useHeidiDeterministicLinkedInCard ?
+        `[Scott visual skill]: Rendering deterministic Heidi LinkedIn brand template for "${draft.meta.content_angle ?? draftTitle(draft)}".`
+      : usePlaybookImageModelLinkedIn ?
+        `[Scott visual skill]: ORBIT_LINKEDIN_VISUAL_RENDER_MODE=image_model — Phase 2F distilled-brief GPT image for "${draft.meta.content_angle ?? draftTitle(draft)}".`
+      : `[Scott visual skill]: Generating ${platform} ${visualBrief.visual_mode} image for "${draft.meta.content_angle ?? draftTitle(draft)}".`,
     metadata: {
       ui_event: {
         agent_id: "scott",
@@ -1612,26 +2164,130 @@ async function generateSocialAssetForDraft(args: {
   });
 
   try {
+    if (useHeidiDeterministicLinkedInCard && li) {
+      const rendered = await renderHeidiDeterministicLinkedInCardForWorkflow({
+        workflow,
+        draft,
+        visualBrief,
+        profileId: li.profile_id,
+      });
+      return {
+        asset: rendered.asset,
+        visualBrief,
+        deterministicVisibleCopy: rendered.deterministic_visible_copy,
+      };
+    }
+
+    if (usePlaybookImageModelLinkedIn && li && draft.type === "linkedin_post") {
+      const liDraft = draft as CampaignLinkedInPostDraft;
+      const contract = buildSafeLinkedInVisibleTextContract({
+        workflow,
+        draft: liDraft,
+        profileId: li.profile_id,
+        day: draft.meta.day,
+      });
+      const fmtId = draft.meta.channel_post_format;
+      const fmtLabel =
+        li.post_format_patterns.find((x) => x.id === fmtId)?.label ??
+        String(fmtId ?? "linkedin_native");
+      const { prompt: pbPrompt, negativePrompt } = buildPlaybookDrivenLinkedInImagePrompt({
+        companyName:
+          workflow.website_intelligence?.company_name ?? workflow.brand_kit?.brand_name ?? "Company",
+        draft: liDraft,
+        channelIntelligence: li,
+        formatPattern: fmtLabel,
+        visibleText: contract,
+        sourceProof: draft.meta.extracted_fact,
+        visualBriefHints: {
+          source_anchor: visualBrief.visual_source_anchor,
+          negative_prompt: visualBrief.negative_prompt,
+        },
+      });
+      const fullPromptForAsset = [pbPrompt, "", "Negative / avoidance constraints:", negativePrompt].join("\n");
+      const img = await generateOpenAiImageFromFullPrompt({
+        prompt: fullPromptForAsset,
+        size: "1024x1024",
+      });
+      const channelExtras = {
+        channel_visual_profile_id: li.profile_id,
+        channel_visual_prompt_rule: compactText(buildLinkedInVisualRulesForPrompt(li), 360),
+        channel_style_match_reason: `Phase 2F distilled visual brief GPT image (${li.profile_id}) format ${String(fmtId ?? "")}; render_mode=image_model; MD not injected.`,
+      };
+      return {
+        asset: {
+          id: crypto.randomUUID(),
+          draft_type: draft.type,
+          platform,
+          day: draft.meta.day,
+          prompt: fullPromptForAsset,
+          image_prompt_detailed: pbPrompt,
+          negative_prompt: [visualBrief.negative_prompt, negativePrompt].filter(Boolean).join("\n"),
+          visual_source_anchor: visualBrief.visual_source_anchor,
+          visual_style_notes: `LinkedIn Phase 2F — distilled playbook brief + compact visible copy (full MD not in image prompt). ${visualBrief.visual_style_notes ?? ""}`.trim(),
+          visual_mode: "brand_graphic" as const,
+          rendering_method: "openai_image" as const,
+          source_draft_id: draft.meta.id,
+          ...channelExtras,
+          playbook_markdown_path: li.playbook_markdown_path,
+          playbook_driven: true,
+          linkedin_image_full_md_injected: false,
+          visible_text_contract: JSON.stringify(contract),
+          openai_image_model_used: img.model_used,
+          openai_image_fallback_used: img.fallback_used,
+          ...(img.openai_image_primary_failure_sanitized ?
+            { openai_image_primary_failure_sanitized: img.openai_image_primary_failure_sanitized }
+          : {}),
+          image_url: img.image_url,
+          created_at: new Date().toISOString(),
+        },
+        visualBrief,
+      };
+    }
+
+    const imageVisualMode = visualBrief.visual_mode === "brand_graphic" ? "brand_graphic" : "photo_real_editorial";
     const response = await generateBrandBackground(
       visualBrief.prompt,
       workflow.brand_kit,
       workflow.visual_identity,
-      "photo_real_editorial",
+      imageVisualMode,
     );
+    const channelExtras =
+      platform === "linkedin" && li ?
+        {
+          channel_visual_profile_id: li.profile_id,
+          channel_visual_prompt_rule: compactText(buildLinkedInVisualRulesForPrompt(li), 360),
+          channel_style_match_reason: `Applied ${li.profile_id} visual playbook for LinkedIn format ${String(draft.meta.channel_post_format ?? draft.meta.channel_format ?? "")}.`,
+        }
+      : {};
+
     return {
-      id: crypto.randomUUID(),
-      draft_type: draft.type,
-      platform,
-      day: draft.meta.day,
-      prompt: response.full_prompt,
-      image_prompt_detailed: visualBrief.prompt,
-      negative_prompt: visualBrief.negative_prompt,
-      visual_source_anchor: visualBrief.visual_source_anchor,
-      visual_style_notes: visualBrief.visual_style_notes,
-      visual_mode: visualBrief.visual_mode,
-      source_draft_id: draft.meta.id,
-      image_url: response.image_url,
-      created_at: new Date().toISOString(),
+      asset: {
+        id: crypto.randomUUID(),
+        draft_type: draft.type,
+        platform,
+        day: draft.meta.day,
+        prompt: response.full_prompt,
+        image_prompt_detailed: visualBrief.prompt,
+        negative_prompt: visualBrief.negative_prompt,
+        visual_source_anchor: visualBrief.visual_source_anchor,
+        visual_style_notes: visualBrief.visual_style_notes,
+        visual_mode: visualBrief.visual_mode,
+        rendering_method: "openai_image",
+        source_draft_id: draft.meta.id,
+        ...channelExtras,
+        image_url: response.image_url,
+        ...(response.model_used ? { openai_image_model_used: response.model_used } : {}),
+        ...(response.fallback_used !== undefined ?
+          { openai_image_fallback_used: response.fallback_used }
+        : {}),
+        ...(response.openai_image_primary_failure_sanitized ?
+          {
+            openai_image_primary_failure_sanitized: response.openai_image_primary_failure_sanitized,
+          }
+        : {}),
+        created_at: new Date().toISOString(),
+      },
+      visualBrief,
     };
   } catch (error) {
     workflowStore.addLog(workflowId, {
@@ -1641,6 +2297,6 @@ async function generateSocialAssetForDraft(args: {
         error instanceof Error ? error.message : "unknown error"
       }`,
     });
-    return null;
+    return { asset: null, visualBrief };
   }
 }

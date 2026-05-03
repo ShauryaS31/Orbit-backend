@@ -9,7 +9,11 @@ import type { BrandKit, VisualIdentity } from "@/lib/types/orbit";
 const DEFAULT_VISUAL_VIBE = "clean editorial campaign photography with soft lighting";
 
 export const IMAGE_GENERATION_ENABLED = process.env.ENABLE_IMAGE_GEN === "true";
-const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? "gpt-image-1.5";
+
+/** Default when `OPENAI_IMAGE_MODEL` is unset — Phase 2F ships `gpt-image-1.5` until org access supports newer tiers reliably. */
+export const DEFAULT_OPENAI_IMAGE_MODEL = "gpt-image-1.5";
+
+const IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL ?? DEFAULT_OPENAI_IMAGE_MODEL;
 const IMAGE_QUALITY = parseImageQuality(process.env.OPENAI_IMAGE_QUALITY);
 const IMAGE_SIZE = parseImageSize(process.env.OPENAI_IMAGE_SIZE);
 
@@ -19,12 +23,125 @@ let dormantCreditNoticeEmitted = false;
 
 export type ImageVisualMode = "photo_real_editorial" | "brand_graphic" | "abstract_background";
 
+export type BrandBackgroundResult = {
+  image_url: string;
+  full_prompt: string;
+  dormant?: boolean;
+  model_used?: string;
+  fallback_used?: boolean;
+  /** Present when primary model failed and fallback produced the raster. */
+  openai_image_primary_failure_sanitized?: string;
+};
+
+/** Resilience fallback when the primary model is rejected by the API (e.g. capability/account). */
+const FALLBACK_IMAGE_MODEL = "gpt-image-1.5";
+
+type OpenAiImageSize = "1536x1024" | "auto" | "1024x1024" | "1024x1536";
+
+function sanitizeOpenAiErrorMessage(msg: string): string {
+  return msg
+    .replace(/\bsk-[a-zA-Z0-9]{20,}\b/g, "[redacted]")
+    .replace(/\bBearer\s+[a-zA-Z0-9._-]+\b/gi, "Bearer [redacted]")
+    .slice(0, 800);
+}
+
+async function generateOpenAiImageWithModelFallback(args: {
+  prompt: string;
+  size: OpenAiImageSize;
+  quality: ReturnType<typeof parseImageQuality>;
+}): Promise<{
+  image_url: string;
+  model_used: string;
+  fallback_used: boolean;
+  primary_error_sanitized?: string;
+}> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured.");
+  }
+  const client = new OpenAI({ apiKey });
+  const requested = IMAGE_MODEL;
+  let modelUsed = requested;
+  let fallbackUsed = false;
+  let result;
+  try {
+    result = await client.images.generate({
+      model: requested,
+      prompt: args.prompt,
+      size: args.size,
+      quality: args.quality,
+      n: 1,
+    });
+  } catch (firstError) {
+    const msg = firstError instanceof Error ? firstError.message : String(firstError);
+    const safe = sanitizeOpenAiErrorMessage(msg);
+    const modelish =
+      /\b(model|unsupported|does not exist|invalid|unknown)\b/i.test(msg) ||
+      /\b403\b/.test(msg) ||
+      /must be verified|organization must be verified/i.test(msg);
+    if (requested !== FALLBACK_IMAGE_MODEL && modelish) {
+      console.warn(
+        `[Visual Agent]: IMAGE_MODEL=${requested} FAILED — primary OpenAI image model error (sanitized): ${safe}`,
+      );
+      console.warn(
+        `[Visual Agent]: FALLBACK_USED=true — retrying with ${FALLBACK_IMAGE_MODEL}. Smoke QA must treat this as not a pure ${requested} success.`,
+      );
+      fallbackUsed = true;
+      modelUsed = FALLBACK_IMAGE_MODEL;
+      result = await client.images.generate({
+        model: FALLBACK_IMAGE_MODEL,
+        prompt: args.prompt,
+        size: args.size,
+        quality: args.quality,
+        n: 1,
+      });
+      const image = result.data?.[0];
+      const imageUrl = image?.url;
+      if (imageUrl) {
+        const savedUrl = await saveRemoteImage(imageUrl);
+        return {
+          image_url: savedUrl,
+          model_used: modelUsed,
+          fallback_used: fallbackUsed,
+          primary_error_sanitized: safe,
+        };
+      }
+      if (image?.b64_json) {
+        const savedUrl = await saveGeneratedImage(image.b64_json);
+        return {
+          image_url: savedUrl,
+          model_used: modelUsed,
+          fallback_used: fallbackUsed,
+          primary_error_sanitized: safe,
+        };
+      }
+      throw new Error("OpenAI did not return an image URL or base64 payload.");
+    } else {
+      throw firstError;
+    }
+  }
+
+  const image = result.data?.[0];
+  const imageUrl = image?.url;
+  if (imageUrl) {
+    const savedUrl = await saveRemoteImage(imageUrl);
+    return { image_url: savedUrl, model_used: modelUsed, fallback_used: fallbackUsed };
+  }
+
+  if (image?.b64_json) {
+    const savedUrl = await saveGeneratedImage(image.b64_json);
+    return { image_url: savedUrl, model_used: modelUsed, fallback_used: fallbackUsed };
+  }
+
+  throw new Error("OpenAI did not return an image URL or base64 payload.");
+}
+
 export async function generateBrandBackground(
   prompt: string,
   palette: BrandKit,
   visualIdentity?: VisualIdentity,
   visualMode: ImageVisualMode = "brand_graphic",
-): Promise<{ image_url: string; full_prompt: string; dormant?: boolean }> {
+): Promise<BrandBackgroundResult> {
   const fullPrompt = buildBrandPrompt(prompt, palette, visualIdentity, visualMode);
 
   if (!IMAGE_GENERATION_ENABLED) {
@@ -41,38 +158,20 @@ export async function generateBrandBackground(
     };
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not configured.");
-  }
-
-  const client = new OpenAI({ apiKey });
-
-  const result = await client.images.generate({
-    model: IMAGE_MODEL,
+  const out = await generateOpenAiImageWithModelFallback({
     prompt: fullPrompt,
     size: IMAGE_SIZE,
     quality: IMAGE_QUALITY,
-    n: 1,
   });
-
-  const image = result.data?.[0];
-  const imageUrl = image?.url;
-  if (imageUrl) {
-    const savedUrl = await saveRemoteImage(imageUrl);
-    return { image_url: savedUrl, full_prompt: fullPrompt };
-  }
-
-  if (image?.b64_json) {
-    const savedUrl = await saveGeneratedImage(image.b64_json);
-    return { image_url: savedUrl, full_prompt: fullPrompt };
-  }
-
-  if (!imageUrl) {
-    throw new Error("OpenAI did not return an image URL or base64 payload.");
-  }
-
-  return { image_url: imageUrl, full_prompt: fullPrompt };
+  return {
+    image_url: out.image_url,
+    full_prompt: fullPrompt,
+    model_used: out.model_used,
+    fallback_used: out.fallback_used,
+    ...(out.primary_error_sanitized ?
+      { openai_image_primary_failure_sanitized: out.primary_error_sanitized }
+    : {}),
+  };
 }
 
 async function saveGeneratedImage(base64Image: string): Promise<string> {
@@ -85,6 +184,41 @@ async function saveRemoteImage(imageUrl: string): Promise<string> {
     throw new Error(`Unable to download generated image from OpenAI: ${response.status}`);
   }
   return saveImageBuffer(Buffer.from(await response.arrayBuffer()));
+}
+
+/** Saves a pre-rendered JPEG (e.g. deterministic SVG raster) under `public/generated-images`. */
+export async function saveDeterministicCampaignImage(sourceBuffer: Buffer): Promise<{
+  image_url: string;
+  relative_public_path: string;
+}> {
+  const outputDir = path.join(process.cwd(), "public", "generated-images");
+  const filename = `${crypto.randomUUID()}.jpg`;
+  const jpegBuffer = await sharp(sourceBuffer)
+    .resize(1080, 1080, { fit: "cover", position: "center" })
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toBuffer();
+
+  await mkdir(outputDir, { recursive: true });
+  const diskPath = path.join(outputDir, filename);
+  await writeFile(diskPath, jpegBuffer);
+
+  try {
+    const url = await uploadPublicAsset({
+      buffer: jpegBuffer,
+      objectPath: `generated-images/${filename}`,
+      contentType: "image/jpeg",
+    });
+    return { image_url: url, relative_public_path: path.join("public", "generated-images", filename) };
+  } catch (error) {
+    console.warn(
+      "[Visual Agent]: Supabase upload failed; falling back to local generated asset.",
+      error instanceof Error ? error.message : error,
+    );
+    return {
+      image_url: `/generated-images/${filename}`,
+      relative_public_path: path.join("public", "generated-images", filename),
+    };
+  }
 }
 
 async function saveImageBuffer(sourceBuffer: Buffer): Promise<string> {
@@ -125,6 +259,52 @@ function parseImageQuality(value?: string): "auto" | "low" | "medium" | "high" {
     return value;
   }
   return "medium";
+}
+
+/** Phase 2E — full creative prompt without brand-kit wrapper (LinkedIn playbook is source of truth). */
+export async function generateOpenAiImageFromFullPrompt(args: {
+  prompt: string;
+  size?: "1024x1024" | "1536x1024" | "1024x1536" | "auto";
+}): Promise<{
+  image_url: string;
+  full_prompt: string;
+  model_used: string;
+  fallback_used: boolean;
+  openai_image_primary_failure_sanitized?: string;
+}> {
+  const resolvedSize =
+    args.size ??
+    parseImageSize(
+      process.env.OPENAI_LINKEDIN_IMAGE_SIZE ?? process.env.OPENAI_IMAGE_SIZE,
+    );
+  if (!IMAGE_GENERATION_ENABLED) {
+    if (!dormantCreditNoticeEmitted) {
+      dormantCreditNoticeEmitted = true;
+      console.warn(
+        "[Visual Agent]: Image generation is currently in DORMANT mode to save credits.",
+      );
+    }
+    return {
+      image_url: PLACEHOLDER_BRAND_MOTIF_URL,
+      full_prompt: args.prompt,
+      model_used: IMAGE_MODEL,
+      fallback_used: false,
+    };
+  }
+  const out = await generateOpenAiImageWithModelFallback({
+    prompt: args.prompt,
+    size: resolvedSize,
+    quality: IMAGE_QUALITY,
+  });
+  return {
+    image_url: out.image_url,
+    full_prompt: args.prompt,
+    model_used: out.model_used,
+    fallback_used: out.fallback_used,
+    ...(out.primary_error_sanitized ?
+      { openai_image_primary_failure_sanitized: out.primary_error_sanitized }
+    : {}),
+  };
 }
 
 function buildBrandPrompt(
